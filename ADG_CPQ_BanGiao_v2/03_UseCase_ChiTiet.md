@@ -833,6 +833,7 @@ Số lượng báo giá theo đại lý/sản phẩm/thời gian, tỷ lệ phá
 | O2 | Có cho bán dưới giá nhập không (mặc định: chặn) | Công ty / sếp |
 | O3 | Số ngày hiệu lực báo giá (mặc định: chưa in hạn) | Công ty / sếp |
 | O4 | Quy trình & kênh gửi BOM nhà máy | Bộ phận sản xuất |
-| O5 | Nền tảng (Zalo Mini App / web) & kênh gửi khách | Anh DUong / công ty |
-| — | Bảng tính BOM chính thức (đầu vào UC-A8) | Công ty |
+| ~~O5~~ | **Đã chốt (03/07):** web-first — web app mobile-first cho đại lý + web admin; Zalo Mini App chỉ là vỏ bọc giai đoạn sau [D11] | — |
+| O9 | OUTPUT của workbook BOM trả gì: chỉ [mã vật tư + số lượng] (khuyến nghị — đơn giá quản lý trong hệ thống) hay cả tiền [D14] | Xem file Excel thật |
+| — | File Excel BOM thật, chuẩn hoá thành workbook INPUT/OUTPUT (đầu vào UC-A6/A8) | Công ty |
 | — | Quy tắc làm tròn tiền (đề xuất: về đồng từng dòng) | Kế toán xác nhận |

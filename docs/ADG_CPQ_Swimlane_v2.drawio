@@ -76,7 +76,7 @@
         <mxCell id="n_sfilter" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;" value="Chạy điều kiện tương thích → LỌC SKU hợp lệ [D2] + auto-fill thông số linh kiện" vertex="1">
           <mxGeometry height="55" width="240" x="340" y="535" as="geometry" />
         </mxCell>
-        <mxCell id="n_sbomerr" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;dashed=1;" value="Lỗi công thức / vật tư thiếu giá: DỪNG, cảnh báo admin" vertex="1">
+        <mxCell id="n_sbomerr" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;dashed=1;" value="Workbook BOM lỗi / vật tư thiếu giá: DỪNG, cảnh báo admin [D14]" vertex="1">
           <mxGeometry height="50" width="240" x="340" y="825" as="geometry" />
         </mxCell>
         <mxCell id="n_sbom" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" value="Bước 3: Tính BOM từng hạng mục → cost_material + gross → GIÁ NHẬP [ẩn]" vertex="1">
