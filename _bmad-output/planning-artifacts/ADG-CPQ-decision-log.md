@@ -19,6 +19,9 @@
 | D7 | VAT | Giữ **một mức chung** toàn hệ thống. Không ưu tiên phân hoá thuế suất lúc này. | Giữ nguyên thiết kế; ghi chú xem lại sau MVP. |
 | D8 | Thiết bị | Đại lý thao tác **chủ yếu trên điện thoại** — yêu cầu mobile-first cho phần đại lý (độc lập với quyết định nền tảng O5). | Thêm mục yêu cầu phi chức năng. |
 | D9 | Vai trò hệ thống | **HUỶ ý tưởng vai thứ 3 (02/07, anh DUong đính chính):** khách hàng cuối **không truy cập hệ thống**. Chỉ có đúng **2 vai: admin + đại lý** như thiết kế gốc của BA; khách là người nhận báo giá thụ động. | Giữ nguyên enum `user_role`; không thêm nhóm UC khách. |
+| D11 | Nền tảng: web-first | MVP = **web app mobile-first** cho đại lý + **web admin**; Zalo Mini App chỉ là cổng/vỏ bọc ở Phase 2, dùng chung API/UI web. Kênh gửi khách MVP: tải PDF thủ công (bắt buộc) + Zalo OA tự động (should-have). Đóng O5. | PRD NFR-04; kiến trúc frontend phải nhúng được vào webview ZMA. |
+| D12 | Ảnh mock-up AI trong MVP | Chốt 03/07: mock-up AI **nằm trong MVP** (gắn với mục tiêu số 1 — tăng tỷ lệ chốt đơn). | PRD nhóm F6. |
+| D13 | Quy mô & mục tiêu | Năm đầu: **toàn hệ thống >100 đại lý**. Ưu tiên mục tiêu: tăng chốt đơn > giảm sai BOM > rút ngắn thời gian báo giá > chuẩn hoá giá. | PRD mục 2, 9; NFR quy mô. |
 | D10 | Engine BOM: import toàn bộ vào hệ thống | Chốt phương án **(B) — toàn bộ logic BOM nằm trong hệ thống**, không dùng Excel làm engine. Lý do: phiếu BOM sản xuất gửi nhà máy và nhiều logic phức tạp vượt khả năng Excel. File Excel hiện hành (khi công thức được chốt) là **nguồn để AI-assisted import một lần**, nghiệm thu bằng golden tests (chạy song song Excel vs hệ thống trên N bộ thông số thật, khớp 100% mới go-live); sau import, hệ thống là nguồn chân lý duy nhất — khoá sửa Excel. | UC-A6, UC-07 giữ mô hình công thức trong hệ thống như BA đề xuất, bổ sung yêu cầu ngôn ngữ công thức có rẽ nhánh (if/else, bảng tra theo lựa chọn) + UC công cụ import & golden tests. F4 giữ hiệu lực. |
 
 ## B. Lỗi tài liệu phải sửa (F) — mâu thuẫn nội bộ, không cần chốt nghiệp vụ
@@ -39,7 +42,7 @@
 | O2 | Đại lý có được bán dưới giá nhập không | Mặc định **chặn** (giá bán ≥ giá nhập), kèm cờ cấu hình để nới. | Công ty / sếp |
 | O3 | Thời hạn hiệu lực báo giá | Trường `validity_days` cấu hình được, nullable; để trống = không in hạn lên PDF. | Công ty / sếp |
 | O4 | Quy trình đặt hàng nhà máy (kênh, format, định tuyến nhà máy nào) | MVP dừng ở "xuất phiếu BOM chuẩn"; kênh gửi (API/email) chốt sau. | Anh DUong hỏi bộ phận sản xuất |
-| O5 | Nền tảng: Zalo Mini App (đại lý) + web admin — **chưa chắc chắn** | Tài liệu viết trung lập nền tảng; kênh gửi khách (Zalo OA/Mini App/tải PDF thủ công) chốt cùng lúc. | Anh DUong / công ty |
+| ~~O5~~ | **ĐÃ ĐÓNG (03/07) → D11:** web-first. Lời chủ dự án: "ZMA chỉ là cổng, CPQ như một web đính vào — cứ WEB trước." MVP = web app mobile-first (đại lý) + web admin; Phase 2 bọc vào Zalo Mini App dùng chung API/UI. Kênh gửi khách MVP: tải PDF thủ công (bắt buộc) + Zalo OA tự động (should-have). | — | — |
 | ~~O6~~ | **ĐÃ ĐÓNG (02/07) → D10:** chốt import toàn bộ logic BOM vào hệ thống. Còn phụ thuộc: công thức cụ thể chưa chốt — chờ bảng tính chính thức từ công ty để thực hiện import + golden tests. | — | — |
 | ~~O7~~ | **ĐÃ ĐÓNG (02/07):** giữ `product` tối giản theo triết lý config-driven; màu sắc & tương tự là thông số dự án (UC-A2). Rủi ro ghi nhận để xử lý khi có catalog thật: nếu màu chọn lúc báo giá thì ảnh dùng cho mock-up AI phải theo màu đã chọn — một `thumbnail_url` không đủ. | — | — |
 | ~~O8~~ | **ĐÃ ĐÓNG (02/07) → D9:** khách hàng không truy cập hệ thống; câu hỏi về luồng khách tự cấu hình không còn hiệu lực. | — | — |
