@@ -2,6 +2,9 @@
 //  ADG CPQ - Hệ thống báo giá tự động cho đại lý
 //  ERD (DBML) - import trực tiếp vào https://dbdiagram.io
 //
+//  PHIÊN BẢN 3 (03/07/2026) — giống hệt v2, CHỈ đổi cách tính BOM [D14]:
+//  không import logic Excel vào hệ thống nữa, BOM tính bằng chính file
+//  Excel của công ty qua hợp đồng INPUT/OUTPUT.
 //  PHIÊN BẢN 2 (02/07/2026) — cập nhật sau review & phỏng vấn nghiệp vụ.
 //  Bản gốc của BA: docs/_ban-goc-BA/ADG_CPQ_ERD.dbml
 //  Mọi thay đổi truy vết về mã D-x / F-x / O-x trong:
@@ -17,11 +20,11 @@
 //   - [D3] Bỏ band_percent; range giá bán chỉ còn min–max [OPEN O1: giá
 //     trị cụ thể chờ công ty ban hành].
 //   - [D9] Giữ đúng 2 vai admin | dealer. Khách cuối không truy cập.
-//   - [D14 - đảo ngược D10] BOM tính bằng CHÍNH FILE EXCEL của công ty
-//     (Excel-as-engine): hệ thống đẩy thông số vào sheet INPUT, đọc sheet
-//     OUTPUT về — không import logic. Workbook upload có phiên bản.
-//     Ngôn ngữ công thức trong hệ thống chỉ còn dùng cho auto-fill
-//     thông số linh kiện + điều kiện lọc SKU tương thích.
+//   - [D14 - v3, thay D10] BOM tính bằng CHÍNH FILE EXCEL của công ty:
+//     hệ thống bơm thông số vào sheet INPUT, đọc kết quả từ sheet OUTPUT
+//     — không import logic. File upload lên hệ thống, có phiên bản +
+//     nghiệm thu bộ ca mẫu. Ngôn ngữ công thức trong hệ thống chỉ còn
+//     dùng cho auto-fill thông số linh kiện + điều kiện lọc SKU.
 //   - [F1..F4] Sửa các mâu thuẫn: ảnh cho phép trống khi nháp, snapshot
 //     khách hàng & sản phẩm, một BOM active mỗi sản phẩm.
 //   - Thêm config_audit_log (truy vết ai đổi giá/công thức lúc nào).
@@ -30,7 +33,7 @@
 Project ADG_CPQ {
   database_type: 'PostgreSQL'
   Note: '''
-  # Ngôn ngữ công thức [D14: chỉ dùng cho auto-fill + lọc tương thích, KHÔNG dùng cho BOM]
+  # Ngôn ngữ công thức [D14: CHỈ dùng cho auto-fill + lọc tương thích, KHÔNG dùng cho BOM]
   - Biến: proj.<code> (thông số dự án của hạng mục), comp.<code> (thông số mặc định của SKU linh kiện đã chọn).
   - Toán tử: + - * / ( ) ; so sánh: = != < <= > >= ; logic: and or not.
   - Hàm: if(điều_kiện, giá_trị_đúng, giá_trị_sai), round(x[, bậc]), ceil(x), floor(x), min(...), max(...).
@@ -39,16 +42,17 @@ Project ADG_CPQ {
   - Đầu ra component_sku_applicability.condition_expression = true/false (SKU có khả dụng không).
 
   # Tính BOM qua workbook Excel [D14]
-  - Mỗi sản phẩm một workbook chuẩn hoá (product_bom_workbook): sheet INPUT có ô đặt tên
-    khớp code thông số dự án; sheet OUTPUT là bảng chuẩn [material_code, quantity].
-  - Hệ thống ghi giá trị thông số vào INPUT -> engine tính -> đọc OUTPUT.
-  - [OPEN — O9] OUTPUT khuyến nghị chỉ gồm mã vật tư + số lượng (đơn giá lấy từ bảng material
-    trong hệ thống để giữ audit + bảo mật giá); có trả cả tiền hay không chốt khi xem file thật.
-  - Nghiệm thu: bộ ca mẫu (input + kết quả kỳ vọng) chạy qua workbook, khớp mới cho active;
-    chạy hồi quy mỗi khi upload phiên bản workbook mới.
+  - Logic tính vật tư nằm NGUYÊN trong file Excel của công ty — hệ thống không import, không tái hiện.
+  - Mỗi sản phẩm một workbook chuẩn hoá (bảng product_bom_workbook): sheet INPUT có ô đặt tên
+    khớp code thông số dự án; sheet OUTPUT là bảng chuẩn [mã vật tư, số lượng].
+  - Hệ thống ghi giá trị thông số vào INPUT -> tính -> đọc OUTPUT.
+  - Chỉ phiên bản workbook vượt NGHIỆM THU BỘ CA MẪU (so kết quả với đáp án người làm giá,
+    khớp 100%) mới được dùng tính giá thật; sửa logic = sửa file -> upload phiên bản mới -> nghiệm thu lại.
+  - [OPEN] OUTPUT khuyến nghị chỉ gồm mã + số lượng (đơn giá lấy từ bảng material trong hệ
+    thống để giữ audit + bảo mật giá); có trả cả tiền hay không — chốt khi xem file thật.
 
   # Công thức giá (ẩn với đại lý các phần *hidden*) — tính THEO TỪNG HẠNG MỤC [D1]
-  item.cost_material = Σ(qty_từ_OUTPUT_workbook × material.unit_price)  -- *hidden* [D14][OPEN O9]
+  item.cost_material = Σ(qty_từ_OUTPUT_workbook × material.unit_price)  -- *hidden* [D14]
                      + Σ(item_component.unit_price × quantity)     -- linh kiện cộng thẳng
                      + Σ(item_accessory.unit_price)                -- phụ kiện (SL luôn = 1)
   item.applied_gross% = global_gross% (theo sản phẩm)
@@ -132,12 +136,6 @@ Enum delivery_status {
   pending
   sent
   failed
-}
-
-Enum ai_image_status {
-  pending           // đã enqueue, đang sinh (giữ chỗ lượt gen)
-  succeeded         // có ảnh - tính lượt
-  failed_technical  // lỗi dịch vụ AI - KHÔNG tính lượt [D6][AD-14]
 }
 
 // ---------------------------------------------------------------------
@@ -398,14 +396,14 @@ Table product_accessory {
 }
 
 // ---------------------------------------------------------------------
-//  6. VẬT TƯ & WORKBOOK BOM [D14: Excel-as-engine, không import logic]
+//  6. VẬT TƯ & WORKBOOK BOM [D14: BOM tính bằng file Excel, không import logic]
 // ---------------------------------------------------------------------
 Table material {
   id         bigint         [pk, increment]
-  code       varchar        [unique, not null, note: 'PHẢI khớp material_code trong sheet OUTPUT của workbook [D14]']
+  code       varchar        [unique, not null, note: 'PHẢI khớp mã vật tư trong sheet OUTPUT của workbook [D14]']
   name       varchar        [not null]
   unit_id    bigint         [ref: > unit_of_measure.id]
-  unit_price decimal(18,2)  [not null, note: 'ĐƠN GIÁ hiện hành (1 giá, không lịch sử - MVP) - ẩn với đại lý; thay đổi ghi audit log [OPEN O9: nếu OUTPUT workbook trả cả tiền thì vai trò cột này thu hẹp]']
+  unit_price decimal(18,2)  [not null, note: 'ĐƠN GIÁ hiện hành (1 giá, không lịch sử - MVP) - ẩn với đại lý; thay đổi ghi audit log']
   is_active  boolean        [not null, default: true]
   Note: 'Vật tư master do admin quản lý. Chỉ lưu 1 giá hiện hành.'
 }
@@ -413,12 +411,12 @@ Table material {
 Table product_bom_workbook {
   id             bigint    [pk, increment]
   product_id     bigint    [not null, ref: > product.id]
-  version        int       [not null, note: 'tăng dần theo sản phẩm; báo giá ghi lại version đã dùng']
-  file_url       varchar   [not null, note: 'file .xlsx lưu object storage']
+  version        int       [not null, note: 'tăng dần theo sản phẩm']
+  file_url       varchar   [not null, note: 'file .xlsx của công ty, lưu trong hệ thống']
   checksum       varchar   [not null, note: 'phát hiện file bị đổi ngoài luồng']
-  input_mapping  text      [note: 'JSON: code thông số dự án -> named range trong sheet INPUT']
-  output_range   varchar   [note: 'named range/vùng bảng OUTPUT chuẩn [material_code, quantity] [OPEN O9]']
-  is_active      boolean   [not null, default: false, note: 'chỉ được active sau khi vượt bộ ca nghiệm thu']
+  input_mapping  text      [note: 'ánh xạ: code thông số dự án -> tên ô trong sheet INPUT']
+  output_range   varchar   [note: 'vùng bảng OUTPUT chuẩn [mã vật tư, số lượng]']
+  is_active      boolean   [not null, default: false, note: 'chỉ được active sau khi vượt nghiệm thu bộ ca mẫu']
   validated_at   timestamp [note: 'thời điểm vượt nghiệm thu']
   uploaded_by    bigint    [ref: > user_account.id]
   created_at     timestamp
@@ -426,7 +424,7 @@ Table product_bom_workbook {
   indexes {
     (product_id, version) [unique, name: 'uq_bom_workbook_version']
   }
-  Note: '[D14 - MỚI, thay bom_template/bom_template_line] Workbook BOM chuẩn hoá theo sản phẩm: hệ thống ghi thông số vào sheet INPUT, đọc kết quả từ sheet OUTPUT — logic tính nằm NGUYÊN TRONG FILE, hệ thống không tái hiện. [F4] Tối đa MỘT version active mỗi sản phẩm; upload version mới phải qua nghiệm thu bộ ca mẫu + ghi audit.'
+  Note: '[D14 - MỚI, thay bom_template/bom_template_line của v2] Workbook BOM theo sản phẩm: hệ thống ghi thông số vào sheet INPUT, đọc kết quả từ sheet OUTPUT — logic tính nằm NGUYÊN TRONG FILE EXCEL, hệ thống không tái hiện. [F4] Tối đa MỘT version active mỗi sản phẩm; upload version mới phải qua nghiệm thu bộ ca mẫu + ghi audit. Macro/VBA không hỗ trợ.'
 }
 
 // ---------------------------------------------------------------------
@@ -505,8 +503,7 @@ Table quote_item {
   selling_price         decimal(18,2) [note: 'giá bán 1 đơn vị đại lý chọn trong [min,max]']
   line_total            decimal(18,2) [note: 'selling_price × quantity']
 
-  field_photo_updated_at timestamp [note: '[AD-14] mốc thay ảnh gần nhất - dùng đếm lượt gen sau mốc này']
-  bom_workbook_version int    [note: '[D14] snapshot phiên bản workbook đã dùng để tính BOM của hạng mục']
+  ai_generation_count int     [not null, default: 0, note: '[D6] số lần đã tạo ảnh AI cho hạng mục này (tối đa ai_max_regenerate); reset khi thay ảnh hiện trường']
   no_mockup_reason    varchar [note: '[D6] lý do bắt buộc khi phát hành hạng mục không kèm mock-up; có log để công ty giám sát']
 
   indexes {
@@ -570,22 +567,21 @@ Table quote_item_bom_line {
   quantity      decimal(18,4)  [not null, note: 'kết quả công thức từ thông số dự án (cho 1 đơn vị hạng mục)']
   unit_price    decimal(18,2)  [note: 'snapshot đơn giá vật tư - ẩn']
   line_cost     decimal(18,2)  [note: 'quantity × unit_price - ẩn']
-  Note: '[D14] Snapshot kết quả OUTPUT của workbook (× đơn giá hệ thống [OPEN O9]) tại thời điểm tính. Đại lý KHÔNG xem chi tiết. Đây cũng là nguồn phiếu BOM sản xuất gửi nhà máy.'
+  Note: '[D14] Snapshot kết quả OUTPUT của workbook (kèm đơn giá vật tư) tại thời điểm tính, lưu ẩn theo hạng mục. Đại lý KHÔNG xem chi tiết. Đây cũng là nguồn phiếu BOM sản xuất gửi nhà máy.'
 }
 
 Table quote_item_ai_image {
   id            bigint    [pk, increment]
   quote_item_id bigint    [not null, ref: > quote_item.id]
-  generation_no int       [not null, note: '[AD-14] tăng ĐƠN ĐIỆU theo hạng mục, không bao giờ reset/tái sử dụng (thay ảnh không xoá dòng cũ)']
-  status        ai_image_status [not null, default: 'pending', note: '[AD-14] enqueue tạo dòng pending (giữ chỗ, chống race); job cập nhật succeeded | failed_technical']
-  image_url     varchar   [note: 'NULL khi pending/failed']
+  generation_no int       [not null, note: '1..ai_max_regenerate, đếm theo HẠNG MỤC; lần gen lỗi kỹ thuật (không ra ảnh) không tính lượt [D6]']
+  image_url     varchar   [not null]
   is_selected   boolean   [not null, default: false, note: 'tối đa 1 ảnh được chọn mỗi hạng mục (ràng buộc tầng app) - đính vào PDF']
   created_at    timestamp
 
   indexes {
     (quote_item_id, generation_no) [unique, name: 'uq_item_ai_gen']
   }
-  Note: '[D6][AD-14] Ảnh mock-up AI theo hạng mục. KHÔNG có cột đếm tay: số lượt đã dùng = số dòng status != failed_technical tạo sau field_photo_updated_at của hạng mục (lỗi kỹ thuật không tính lượt).'
+  Note: '[D6] Ảnh mock-up AI ghép từ ảnh hiện trường CỦA HẠNG MỤC + thumbnail sản phẩm. Thay ảnh hiện trường → reset lượt gen.'
 }
 
 // ---------------------------------------------------------------------
@@ -648,7 +644,7 @@ TableGroup "5. Phụ kiện" {
   accessory
   product_accessory
 }
-TableGroup "6. Vật tư & BOM" {
+TableGroup "6. Vật tư & workbook BOM" {
   material
   product_bom_workbook
 }

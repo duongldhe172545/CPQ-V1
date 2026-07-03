@@ -1,5 +1,6 @@
-# ADG CPQ — Đặc tả Use Case chi tiết (v2)
+# ADG CPQ — Đặc tả Use Case chi tiết (v3)
 
+> **PHIÊN BẢN 3 (03/07/2026)** — giống hệt v2, **chỉ đổi cách tính BOM [D14]**: không import logic Excel; BOM tính bằng chính file Excel của công ty qua hợp đồng INPUT/OUTPUT (ảnh hưởng: UC-A6, UC-A8, UC-08).
 > **PHIÊN BẢN 2 (02/07/2026)** — cập nhật sau review adversarial + phỏng vấn nghiệp vụ.
 > Bản gốc của BA: `docs/_ban-goc-BA/ADG_CPQ_UseCase_ChiTiet.md`.
 > Mọi thay đổi truy vết về mã `D-x / F-x / O-x` trong `_bmad-output/planning-artifacts/ADG-CPQ-decision-log.md`.
@@ -26,7 +27,7 @@
 | Cấu hình | UC-A3 | Quản lý loại linh kiện, thông số & SKU linh kiện | Admin | — |
 | Cấu hình | UC-A4 | Gán loại linh kiện vào sản phẩm: công thức auto-fill & quy tắc tương thích SKU | Admin | — |
 | Cấu hình | UC-A5 | Quản lý phụ kiện & gán vào sản phẩm | Admin | — |
-| Cấu hình | UC-A6 | Quản lý vật tư & workbook BOM (Excel-as-engine [D14]) | Admin | — |
+| Cấu hình | UC-A6 | Quản lý vật tư & workbook BOM (Excel INPUT/OUTPUT [D14]) | Admin | — |
 | Cấu hình | UC-A7 | Cấu hình giá (gross, range min–max, VAT, hiệu lực) | Admin | — |
 | Cấu hình | UC-A8 | Nghiệm thu workbook BOM bằng bộ ca mẫu | Admin | — |
 | Pipeline | UC-01 | Khởi tạo báo giá & chọn/tạo khách hàng | Đại lý | 1 |
@@ -175,7 +176,7 @@
 **Luồng chính**
 
 1. Admin gán một hoặc nhiều loại linh kiện vào sản phẩm; đặt bắt buộc/không, thứ tự.
-2. Với mỗi thông số linh kiện cần auto-fill, admin nhập biểu thức công thức (biến `proj.<code>`, `comp.<code>`; hỗ trợ `if(...)` — ngôn ngữ công thức FR-022, chỉ dùng cho auto-fill/tương thích [D14]).
+2. Với mỗi thông số linh kiện cần auto-fill, admin nhập biểu thức công thức (biến `proj.<code>`, `comp.<code>`; hỗ trợ `if(...)` — ngôn ngữ công thức này chỉ dùng cho auto-fill/tương thích, không dùng cho BOM [D14]).
 3. **[D2]** Với mỗi SKU của loại linh kiện, admin khai **điều kiện tương thích** (`condition_expression` — biểu thức true/false theo `proj.*`/`comp.*`; để trống = luôn khả dụng cho sản phẩm này). SKU không được khai = không khả dụng cho sản phẩm.
 4. Admin bấm kiểm thử: nhập bộ giá trị thông số mẫu → hệ thống hiển thị danh sách SKU lọt qua bộ lọc và kết quả auto-fill.
 5. Hệ thống validate cú pháp và sự tồn tại của các biến, rồi lưu.
@@ -243,10 +244,10 @@
 
 **Luồng chính**
 
-1. Admin tạo/sửa vật tư (`material`): code, tên, đơn vị, đơn giá hiện hành (thay đổi giá ghi audit log). `code` vật tư phải khớp `material_code` trong OUTPUT của workbook.
+1. Admin tạo/sửa vật tư (`material`): code, tên, đơn vị, đơn giá hiện hành (thay đổi giá ghi audit log). `code` vật tư phải khớp mã vật tư trong OUTPUT của workbook.
 2. Admin upload workbook `.xlsx` cho sản phẩm → hệ thống tạo `product_bom_workbook` version mới (checksum, người upload, audit).
-3. Hệ thống **kiểm tra hợp đồng**: sheet INPUT có đủ ô đặt tên khớp `code` thông số dự án của sản phẩm; sheet OUTPUT đúng bảng chuẩn; mọi `material_code` trong OUTPUT tồn tại trong `material`.
-4. Admin chạy thử với bộ thông số mẫu: hệ thống ghi INPUT → engine tính → hiển thị OUTPUT (danh sách vật tư + số lượng) và giá vốn NVL ước tính.
+3. Hệ thống **kiểm tra hợp đồng**: sheet INPUT có đủ ô đặt tên khớp `code` thông số dự án của sản phẩm; sheet OUTPUT đúng bảng chuẩn; mọi mã vật tư trong OUTPUT tồn tại trong `material`.
+4. Admin chạy thử với bộ thông số mẫu: hệ thống ghi INPUT → tính → hiển thị OUTPUT (danh sách vật tư + số lượng) và giá vốn NVL ước tính.
 5. Version mới chỉ được đặt `is_active` sau khi vượt nghiệm thu (UC-A8); active version mới tự bỏ active version cũ **[F4: đúng một version active mỗi sản phẩm]**.
 
 **Luồng phụ & ngoại lệ**
@@ -259,8 +260,8 @@
 
 **Business rules**
 
-- **Logic tính nằm nguyên trong file Excel** — hệ thống không tái hiện, không import công thức [D14].
-- Đơn giá vật tư chỉ lưu **một giá hiện hành** (MVP); **[OPEN — O9]** OUTPUT khuyến nghị chỉ gồm mã + số lượng, đơn giá lấy từ hệ thống — chốt khi xem file thật.
+- **Logic tính nằm nguyên trong file Excel** — hệ thống không tái hiện, không import công thức [D14]. Macro/VBA không hỗ trợ.
+- Đơn giá vật tư chỉ lưu **một giá hiện hành** (MVP, không lịch sử). **[OPEN]** OUTPUT khuyến nghị chỉ gồm mã + số lượng, đơn giá lấy từ hệ thống — chốt khi xem file thật.
 - Linh kiện và phụ kiện **không** tác động BOM.
 - Đơn giá vật tư và dòng BOM là dữ liệu mật, ẩn với đại lý — thực thi ở tầng API.
 - Sửa file trên ổ đĩa ngoài không có tác dụng — chỉ version đã upload + nghiệm thu mới được dùng (checksum phát hiện lệch).
@@ -319,7 +320,7 @@
 **Luồng chính**
 
 1. Admin nạp **bộ ca mẫu** cho sản phẩm: mỗi ca = bộ giá trị thông số (bao gồm các ca biên) + kết quả kỳ vọng (danh sách mã vật tư + số lượng) do người làm giá xác nhận.
-2. Hệ thống chạy từng ca qua engine: ghi INPUT → tính → đọc OUTPUT.
+2. Hệ thống chạy từng ca: ghi INPUT → tính → đọc OUTPUT.
 3. Hệ thống so OUTPUT với kết quả kỳ vọng từng dòng.
 4. Khớp 100% → version gắn nhãn "đã nghiệm thu" (`validated_at`); admin đặt active.
 5. Bộ ca mẫu lưu theo sản phẩm, **tự chạy lại mỗi khi upload version workbook mới** — chặn active nếu lệch.
@@ -327,13 +328,13 @@
 **Luồng phụ & ngoại lệ**
 
 - **3a (có ca lệch):** liệt kê từng ca (input, kỳ vọng, thực tế); admin đưa người chủ file sửa Excel, upload version mới, chạy lại.
-- **E-1 (engine không tính được file — công thức/macro không hỗ trợ):** báo rõ vị trí lỗi; ghi nhận giới hạn engine để xử lý (xem AD-17).
+- **E-1 (hệ thống không tính được file — công thức/macro không hỗ trợ):** báo rõ vị trí lỗi; logic phải là công thức thuần.
 
 **Business rules**
 
-- **File Excel là nguồn chân lý của logic BOM** [D14]; hệ thống chỉ bảo đảm *file cho kết quả đúng và không bị đổi ngoài luồng* (version + checksum + nghiệm thu).
+- **File Excel là nguồn chân lý của logic BOM** [D14]; hệ thống chỉ bảo đảm *file cho kết quả đúng và không bị đổi ngoài luồng* (phiên bản + checksum + nghiệm thu).
 - Không sản phẩm nào go-live với workbook chưa nghiệm thu.
-- Macro/VBA không được hỗ trợ — logic phải là công thức thuần (ghi vào chuẩn workbook).
+- Sửa logic = sửa file Excel → upload version mới → nghiệm thu lại — không có đường tắt.
 
 ---
 
@@ -594,15 +595,15 @@
 
 **Luồng chính** *(lặp cho từng hạng mục)*
 
-1. **[D14]** Hệ thống ghi giá trị thông số của hạng mục vào sheet INPUT của workbook version active, chạy engine tính, đọc sheet OUTPUT → danh sách [mã vật tư, số lượng] cho **một đơn vị** hạng mục; ghi lại `bom_workbook_version` đã dùng.
-2. Hệ thống tính tiền NVL = Σ(số lượng × đơn giá vật tư từ `material`) **[OPEN — O9]**, ghi `quote_item_bom_line` (ẩn).
+1. **[D14]** Hệ thống ghi giá trị thông số của hạng mục vào sheet INPUT của workbook version active, tính, đọc sheet OUTPUT → danh sách [mã vật tư, số lượng] cho **một đơn vị** hạng mục; ghi lại version workbook đã dùng.
+2. Hệ thống tính tiền NVL = Σ(số lượng × đơn giá vật tư từ `material`), ghi `quote_item_bom_line` (ẩn).
 3. Hệ thống cộng tiền linh kiện (Σ đơn giá × số lượng) và tiền phụ kiện (Σ đơn giá) → `cost_material`.
 4. Hệ thống resolve gross: `global_gross%` + (gross đại lý theo sản phẩm nếu có, ngược lại `default_gross%`).
 5. Hệ thống tính `import_price = cost_material × (1 + gross%/100)`, làm tròn về đồng, và lưu (ẩn cost_material/gross).
 
 **Luồng phụ & ngoại lệ**
 
-- **E-1 (workbook trả lỗi / engine không tính được):** dừng, thông báo lỗi cấu hình, không cho đi tiếp; cảnh báo admin.
+- **E-1 (workbook trả lỗi / không tính được):** dừng, thông báo lỗi cấu hình, không cho đi tiếp; cảnh báo admin.
 - **E-2 (OUTPUT chứa mã vật tư không có trong hệ thống hoặc vật tư thiếu đơn giá):** dừng, cảnh báo admin.
 - **E-3 (sản phẩm chưa có workbook version active):** chặn từ khi chọn sản phẩm (UC-03 E-1 "cấu hình chưa đủ").
 
@@ -833,7 +834,7 @@ Số lượng báo giá theo đại lý/sản phẩm/thời gian, tỷ lệ phá
 | O2 | Có cho bán dưới giá nhập không (mặc định: chặn) | Công ty / sếp |
 | O3 | Số ngày hiệu lực báo giá (mặc định: chưa in hạn) | Công ty / sếp |
 | O4 | Quy trình & kênh gửi BOM nhà máy | Bộ phận sản xuất |
-| ~~O5~~ | **Đã chốt (03/07):** web-first — web app mobile-first cho đại lý + web admin; Zalo Mini App chỉ là vỏ bọc giai đoạn sau [D11] | — |
-| O9 | OUTPUT của workbook BOM trả gì: chỉ [mã vật tư + số lượng] (khuyến nghị — đơn giá quản lý trong hệ thống) hay cả tiền [D14] | Xem file Excel thật |
-| — | File Excel BOM thật, chuẩn hoá thành workbook INPUT/OUTPUT (đầu vào UC-A6/A8) | Công ty |
+| O5 | Nền tảng (Zalo Mini App / web) & kênh gửi khách | Anh DUong / công ty |
+| — | File Excel BOM thật, chuẩn hoá thành workbook INPUT/OUTPUT (đầu vào UC-A6/A8) [D14] | Công ty |
+| — | OUTPUT workbook trả gì: chỉ [mã + số lượng] (khuyến nghị) hay cả tiền | Xem file thật rồi chốt |
 | — | Quy tắc làm tròn tiền (đề xuất: về đồng từng dòng) | Kế toán xác nhận |

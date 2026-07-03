@@ -1,5 +1,6 @@
-# ADG CPQ — Diễn giải nghiệp vụ & triết lý thiết kế (v2)
+# ADG CPQ — Diễn giải nghiệp vụ & triết lý thiết kế (v3)
 
+> **PHIÊN BẢN 3 (03/07/2026)** — giống hệt v2, **chỉ đổi cách tính BOM [D14]**: không import logic Excel vào hệ thống, BOM tính bằng chính file Excel của công ty qua hợp đồng INPUT/OUTPUT (xem A0 và A5).
 > **PHIÊN BẢN 2 (02/07/2026)** — cập nhật sau review adversarial (23 findings) + phỏng vấn nghiệp vụ anh DUong.
 > Bản gốc của BA: `docs/_ban-goc-BA/`. Truy vết quyết định: `_bmad-output/planning-artifacts/ADG-CPQ-decision-log.md` (mã D-x / F-x / O-x).
 
@@ -19,7 +20,7 @@ Yêu cầu cốt lõi: một đại lý bất kỳ có thể được cấp thê
 
 **Tách định nghĩa khỏi giá trị.** Sản phẩm không có cột "chiều dài", "chiều cao" cứng; nó khai báo động bộ thông số trong `project_param_def`, giá trị đại lý nhập nằm ở `quote_item_param`. Thêm thông số mới = thêm một dòng cấu hình. Cùng mô hình cho thông số linh kiện.
 
-**Công thức nhỏ là dữ liệu; logic BOM là file Excel [D14].** Hai tầng logic được tách bạch: (1) **auto-fill thông số linh kiện + điều kiện tương thích SKU** lưu dạng biểu thức chuỗi do admin quản lý trong hệ thống, tham chiếu biến qua `code` ổn định (`proj.<code>`, `comp.<code>`), hỗ trợ rẽ nhánh `if(...)` — đặc tả trong Project Note của file DBML; (2) **toàn bộ logic tính vật tư (BOM)** nằm **nguyên trong file Excel của công ty** — hệ thống không import, không tái hiện, chỉ làm việc qua **hợp đồng INPUT/OUTPUT**: bơm giá trị thông số vào sheet INPUT, đọc kết quả (mã vật tư + số lượng) từ sheet OUTPUT. Quyết định này (D14, 03/07) đảo ngược phương án import-toàn-bộ trước đó (D10): đội làm giá tiếp tục sống trong Excel quen thuộc, đổi lại hệ thống kiểm soát file bằng bộ ba *phiên bản hoá + checksum + nghiệm thu bộ ca mẫu* (UC-A6/A8).
+**Công thức nhỏ là dữ liệu; logic BOM là file Excel [D14].** Hai tầng logic được tách bạch. (1) **Auto-fill thông số linh kiện + điều kiện tương thích SKU**: lưu dạng biểu thức chuỗi do admin quản lý trong hệ thống, tham chiếu biến qua `code` ổn định (`proj.<code>`, `comp.<code>`), hỗ trợ rẽ nhánh `if(...)` — đặc tả trong Project Note của file DBML. (2) **Toàn bộ logic tính vật tư (BOM)**: nằm **nguyên trong file Excel của công ty** — hệ thống không import, không tái hiện, chỉ làm việc qua **hợp đồng INPUT/OUTPUT**: bơm giá trị thông số vào sheet INPUT, đọc kết quả (mã vật tư + số lượng) từ sheet OUTPUT. Đội làm giá tiếp tục làm việc trên file quen thuộc; đổi lại hệ thống kiểm soát file bằng bộ ba *phiên bản hoá + checksum + nghiệm thu bộ ca mẫu* (UC-A6/A8).
 
 **Snapshot khi chốt [D4].** Mọi giá trị của một báo giá đã phát hành (thông số, linh kiện, phụ kiện, dòng BOM, con số giá, **thông tin khách hàng [F2] và sản phẩm [F3]**) được sao lưu trong nhóm bảng `quote_*`. Admin thoải mái đổi cấu hình/công thức/đơn giá về sau — báo giá đã phát hành giữ nguyên số liệu vĩnh viễn. Ngược lại, báo giá **nháp không cam kết gì**: khi phát hành, hệ thống luôn tính lại theo cấu hình mới nhất và yêu cầu đại lý xác nhận nếu giá đổi — không bao giờ phát hành giá lỗi thời.
 
@@ -48,7 +49,7 @@ Hai cơ chế đều đặt tại **bảng gán `product_component_type`** (vì 
 
 ### A5. Vật tư & workbook BOM [D14]
 
-`material` là danh mục vật tư do admin quản lý, một đơn giá hiện hành (không lịch sử — MVP); `code` vật tư phải khớp `material_code` trong OUTPUT của workbook. `product_bom_workbook` gắn theo sản phẩm: admin upload file Excel chuẩn hoá (sheet INPUT ô đặt tên theo thông số, sheet OUTPUT bảng chuẩn), hệ thống kiểm tra hợp đồng + lưu **phiên bản có checksum**; **đúng một version active mỗi sản phẩm [F4]** và chỉ version vượt **nghiệm thu bộ ca mẫu** (UC-A8) mới được active. Linh/phụ kiện không tác động BOM. **[OPEN — O9]** OUTPUT khuyến nghị chỉ gồm mã + số lượng (đơn giá lấy từ hệ thống để giữ audit/bảo mật) — chốt khi xem file thật.
+`material` là danh mục vật tư do admin quản lý, một đơn giá hiện hành (không lịch sử — MVP); `code` vật tư phải khớp mã vật tư trong OUTPUT của workbook. `product_bom_workbook` gắn theo sản phẩm: admin upload file Excel chuẩn hoá (sheet INPUT ô đặt tên theo thông số, sheet OUTPUT bảng chuẩn [mã vật tư, số lượng]), hệ thống kiểm tra hợp đồng + lưu **phiên bản có checksum**; **đúng một version active mỗi sản phẩm [F4]** và chỉ version vượt **nghiệm thu bộ ca mẫu** (UC-A8) mới được active. Linh/phụ kiện không tác động BOM. **[OPEN]** OUTPUT khuyến nghị chỉ gồm mã + số lượng (đơn giá lấy từ hệ thống để giữ audit/bảo mật) — chốt khi xem file thật.
 
 ### A6. Định giá & che giấu dữ liệu nhạy cảm
 
@@ -85,10 +86,10 @@ Chi tiết đầy đủ trong `ADG-CPQ-decision-log.md`; tóm tắt các điểm
 | O3 | Hạn hiệu lực báo giá | `validity_days` cấu hình, trống = không in | Công ty / sếp |
 | O4 | Quy trình BOM nhà máy | MVP: xuất phiếu chuẩn; kênh chốt sau | Bộ phận sản xuất |
 | O5 | Nền tảng & kênh gửi khách | Tài liệu viết trung lập nền tảng | Anh DUong / công ty |
-| — | File Excel BOM thật (chuẩn hoá thành workbook INPUT/OUTPUT) | Đầu vào cho UC-A6/A8 (upload + nghiệm thu) | Công ty |
-| O9 | OUTPUT workbook trả gì: chỉ [mã + số lượng] (khuyến nghị) hay cả tiền | Tài liệu viết theo khuyến nghị, đánh dấu tại chỗ | Anh DUong xem file thật |
+| — | File Excel BOM thật, chuẩn hoá thành workbook INPUT/OUTPUT | Đầu vào cho UC-A6/A8 (upload + nghiệm thu) [D14] | Công ty |
+| — | OUTPUT workbook trả gì: chỉ [mã + số lượng] (khuyến nghị) hay cả tiền | Tài liệu viết theo khuyến nghị | Xem file thật rồi chốt |
 | — | Quy tắc làm tròn tiền | Đề xuất: về đồng từng dòng | Kế toán |
 
 ## Đặc tả use case
 
-Bộ use case đầy đủ ở **`ADG_CPQ_UseCase_ChiTiet.md`** (v2): 8 UC cấu hình (UC-A1..A8, trong đó UC-A6/A8 theo mô hình workbook BOM [D14]), 12 UC pipeline theo mô hình nhiều hạng mục (UC-01..12), 7 UC phụ trợ (UC-P1..P7). Mỗi UC gồm bảng metadata, luồng chính đánh số, luồng phụ/ngoại lệ (a/b/c, E-) và business rules; các điểm chưa chốt đánh dấu `[OPEN — Ox]` tại chỗ.
+Bộ use case đầy đủ ở **`ADG_CPQ_UseCase_ChiTiet.md`** (v3): 8 UC cấu hình (UC-A1..A8, trong đó UC-A6/A8 theo mô hình workbook BOM [D14]), 12 UC pipeline theo mô hình nhiều hạng mục (UC-01..12), 7 UC phụ trợ (UC-P1..P7). Mỗi UC gồm bảng metadata, luồng chính đánh số, luồng phụ/ngoại lệ (a/b/c, E-) và business rules; các điểm chưa chốt đánh dấu `[OPEN — Ox]` tại chỗ.

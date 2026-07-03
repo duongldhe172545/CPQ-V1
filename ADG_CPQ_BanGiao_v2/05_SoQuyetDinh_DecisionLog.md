@@ -19,11 +19,8 @@
 | D7 | VAT | Giữ **một mức chung** toàn hệ thống. Không ưu tiên phân hoá thuế suất lúc này. | Giữ nguyên thiết kế; ghi chú xem lại sau MVP. |
 | D8 | Thiết bị | Đại lý thao tác **chủ yếu trên điện thoại** — yêu cầu mobile-first cho phần đại lý (độc lập với quyết định nền tảng O5). | Thêm mục yêu cầu phi chức năng. |
 | D9 | Vai trò hệ thống | **HUỶ ý tưởng vai thứ 3 (02/07, anh DUong đính chính):** khách hàng cuối **không truy cập hệ thống**. Chỉ có đúng **2 vai: admin + đại lý** như thiết kế gốc của BA; khách là người nhận báo giá thụ động. | Giữ nguyên enum `user_role`; không thêm nhóm UC khách. |
-| D11 | Nền tảng: web-first | MVP = **web app mobile-first** cho đại lý + **web admin**; Zalo Mini App chỉ là cổng/vỏ bọc ở Phase 2, dùng chung API/UI web. Kênh gửi khách MVP: tải PDF thủ công (bắt buộc) + Zalo OA tự động (should-have). Đóng O5. | PRD NFR-04; kiến trúc frontend phải nhúng được vào webview ZMA. |
-| D12 | Ảnh mock-up AI trong MVP | Chốt 03/07: mock-up AI **nằm trong MVP** (gắn với mục tiêu số 1 — tăng tỷ lệ chốt đơn). | PRD nhóm F6. |
-| D13 | Quy mô & mục tiêu | Năm đầu: **toàn hệ thống >100 đại lý**. Ưu tiên mục tiêu: tăng chốt đơn > giảm sai BOM > rút ngắn thời gian báo giá > chuẩn hoá giá. | PRD mục 2, 9; NFR quy mô. |
-| ~~D10~~ | **BỊ ĐẢO NGƯỢC (03/07, lần 2) → xem D14.** Phương án cũ "import toàn bộ logic BOM vào hệ thống" không còn hiệu lực — công ty chốt hướng mới: chỉ quan tâm INPUT/OUTPUT của file Excel. | — | — |
-| D14 | Engine BOM: **Excel-as-engine qua hợp đồng INPUT/OUTPUT** | Hệ thống **không import logic Excel**. Mỗi sản phẩm một **workbook BOM chuẩn hoá**: sheet INPUT (ô đặt tên theo thông số dự án) + sheet OUTPUT (bảng chuẩn kết quả). Hệ thống đẩy giá trị thông số vào INPUT, đọc OUTPUT về. Workbook do admin **upload lên hệ thống, có phiên bản + checksum + kiểm tra hợp đồng khi upload**; báo giá ghi lại phiên bản workbook đã dùng. **Auto-fill thông số linh kiện + lọc SKU tương thích (D2) vẫn cấu hình trong hệ thống** (không qua Excel). Snapshot khi phát hành giữ nguyên (D4). Nghiệm thu = bộ ca mẫu chạy qua workbook, so kết quả kỳ vọng; chạy hồi quy khi upload phiên bản mới. | Viết lại: PRD F9 + FR-021/022/030/090; ERD (bỏ bom_template/line → product_bom_workbook); UC-A6/A8, UC-08; spine AD-4 thu hẹp + AD-17 mới; epics 3.8/8.1/8.3. |
+| ~~D10~~ | **BỊ ĐẢO NGƯỢC (03/07) → xem D14.** Phương án cũ "import toàn bộ logic BOM vào hệ thống" không còn hiệu lực. | — | — |
+| D14 | Engine BOM: **Excel-as-engine qua hợp đồng INPUT/OUTPUT** (v3) | Hệ thống **không import logic Excel**. Mỗi sản phẩm một **workbook BOM chuẩn hoá**: sheet INPUT (ô đặt tên theo thông số dự án) + sheet OUTPUT (bảng chuẩn [mã vật tư, số lượng]). Hệ thống bơm giá trị thông số vào INPUT, đọc OUTPUT về — logic tính nằm nguyên trong file. Workbook do admin **upload lên hệ thống, có phiên bản + checksum + kiểm tra hợp đồng**; chỉ version vượt **nghiệm thu bộ ca mẫu** (khớp 100% đáp án người làm giá) mới được active; báo giá ghi lại version đã dùng. **Auto-fill thông số linh kiện + lọc SKU tương thích (D2) vẫn cấu hình trong hệ thống.** Còn chờ file thật: OUTPUT chỉ trả số lượng (khuyến nghị — đơn giá ở hệ thống) hay cả tiền. | Viết lại UC-A6/A8, UC-08; ERD thay bom_template/bom_template_line bằng product_bom_workbook. F4 giữ hiệu lực (một version active/sản phẩm). |
 
 ## B. Lỗi tài liệu phải sửa (F) — mâu thuẫn nội bộ, không cần chốt nghiệp vụ
 
@@ -43,15 +40,14 @@
 | O2 | Đại lý có được bán dưới giá nhập không | Mặc định **chặn** (giá bán ≥ giá nhập), kèm cờ cấu hình để nới. | Công ty / sếp |
 | O3 | Thời hạn hiệu lực báo giá | Trường `validity_days` cấu hình được, nullable; để trống = không in hạn lên PDF. | Công ty / sếp |
 | O4 | Quy trình đặt hàng nhà máy (kênh, format, định tuyến nhà máy nào) | MVP dừng ở "xuất phiếu BOM chuẩn"; kênh gửi (API/email) chốt sau. | Anh DUong hỏi bộ phận sản xuất |
-| ~~O5~~ | **ĐÃ ĐÓNG (03/07) → D11:** web-first. Lời chủ dự án: "ZMA chỉ là cổng, CPQ như một web đính vào — cứ WEB trước." MVP = web app mobile-first (đại lý) + web admin; Phase 2 bọc vào Zalo Mini App dùng chung API/UI. Kênh gửi khách MVP: tải PDF thủ công (bắt buộc) + Zalo OA tự động (should-have). | — | — |
-| ~~O6~~ | **ĐÃ ĐÓNG (02/07) → D10:** chốt import toàn bộ logic BOM vào hệ thống. Còn phụ thuộc: công thức cụ thể chưa chốt — chờ bảng tính chính thức từ công ty để thực hiện import + golden tests. | — | — |
+| O5 | Nền tảng: Zalo Mini App (đại lý) + web admin — **chưa chắc chắn** | Tài liệu viết trung lập nền tảng; kênh gửi khách (Zalo OA/Mini App/tải PDF thủ công) chốt cùng lúc. | Anh DUong / công ty |
+| ~~O6~~ | **ĐÃ ĐÓNG:** 02/07 chốt D10 (import toàn bộ); **03/07 đảo lại thành D14** (Excel-as-engine INPUT/OUTPUT) — xem D14. | — | — |
 | ~~O7~~ | **ĐÃ ĐÓNG (02/07):** giữ `product` tối giản theo triết lý config-driven; màu sắc & tương tự là thông số dự án (UC-A2). Rủi ro ghi nhận để xử lý khi có catalog thật: nếu màu chọn lúc báo giá thì ảnh dùng cho mock-up AI phải theo màu đã chọn — một `thumbnail_url` không đủ. | — | — |
 | ~~O8~~ | **ĐÃ ĐÓNG (02/07) → D9:** khách hàng không truy cập hệ thống; câu hỏi về luồng khách tự cấu hình không còn hiệu lực. | — | — |
-| O9 | **Nội dung OUTPUT của workbook BOM (D14):** chỉ trả *mã vật tư + số lượng* (đơn giá vẫn ở bảng `material` trong hệ thống — **khuyến nghị**, giữ được audit giá + bảo mật) hay trả *cả tiền* tính sẵn từ Excel? | Tài liệu viết theo hướng khuyến nghị, đánh dấu `[OPEN — O9]` tại các điểm liên quan. | Anh DUong quyết sau khi xem file Excel thật |
 
 ## D. Ghi chú phạm vi đã xác nhận
 
 - Sau phát hành **không theo dõi phản hồi khách** (chấp nhận cho MVP).
-- Không lưu **lịch sử giá vật tư** ở MVP *(sẽ vô hiệu nếu O6 chọn Excel-engine — giá nằm trong hệ thống hay Excel sẽ quyết định lại)*.
+- Không lưu **lịch sử giá vật tư** ở MVP *(sau D14: đơn giá khuyến nghị vẫn nằm trong hệ thống — xem lại nếu OUTPUT workbook trả cả tiền)*.
 - Các UC phụ trợ (quản trị người dùng, hồ sơ đại lý, đơn vị tính, retry gửi, tìm kiếm/sao chép báo giá) phải được viết đầy đủ trong bản cập nhật — không để dồn một câu phụ lục.
 - Cần bổ sung: quy tắc làm tròn tiền VND, audit trail cho dữ liệu giá (ai đổi gì lúc nào), cơ chế thực thi "ẩn dữ liệu mật với đại lý" ở tầng API.
