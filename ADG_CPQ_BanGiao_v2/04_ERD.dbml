@@ -1,0 +1,661 @@
+// =====================================================================
+//  ADG CPQ - Hệ thống báo giá tự động cho đại lý
+//  ERD (DBML) - import trực tiếp vào https://dbdiagram.io
+//
+//  PHIÊN BẢN 2 (02/07/2026) — cập nhật sau review & phỏng vấn nghiệp vụ.
+//  Bản gốc của BA: docs/_ban-goc-BA/ADG_CPQ_ERD.dbml
+//  Mọi thay đổi truy vết về mã D-x / F-x / O-x trong:
+//  _bmad-output/planning-artifacts/ADG-CPQ-decision-log.md
+//
+//  Thay đổi chính so với bản gốc:
+//   - [D1] Thêm tầng quote_item: một báo giá chứa NHIỀU hạng mục sản phẩm;
+//     toàn bộ snapshot (thông số, linh kiện, phụ kiện, BOM, ảnh AI, giá
+//     hạng mục) treo theo hạng mục. Ảnh hiện trường chuyển về hạng mục
+//     (mỗi cửa một vị trí lắp → một ảnh, phục vụ mock-up riêng).
+//   - [D2] Thêm component_sku_applicability: lọc SKU tương thích theo
+//     thông số dự án ngay MVP (đảo rule cũ "không gợi ý SKU").
+//   - [D3] Bỏ band_percent; range giá bán chỉ còn min–max [OPEN O1: giá
+//     trị cụ thể chờ công ty ban hành].
+//   - [D9] Giữ đúng 2 vai admin | dealer. Khách cuối không truy cập.
+//   - [D10] Toàn bộ logic BOM nằm trong hệ thống (không Excel-as-engine);
+//     ngôn ngữ công thức đặc tả ở Project Note; công thức cụ thể sẽ
+//     AI-import từ bảng tính công ty + nghiệm thu golden tests.
+//   - [F1..F4] Sửa các mâu thuẫn: ảnh cho phép trống khi nháp, snapshot
+//     khách hàng & sản phẩm, một BOM active mỗi sản phẩm.
+//   - Thêm config_audit_log (truy vết ai đổi giá/công thức lúc nào).
+// =====================================================================
+
+Project ADG_CPQ {
+  database_type: 'PostgreSQL'
+  Note: '''
+  # Ngôn ngữ công thức [D10]
+  - Biến: proj.<code> (thông số dự án của hạng mục), comp.<code> (thông số mặc định của SKU linh kiện đã chọn).
+  - Toán tử: + - * / ( ) ; so sánh: = != < <= > >= ; logic: and or not.
+  - Hàm: if(điều_kiện, giá_trị_đúng, giá_trị_sai), round(x[, bậc]), ceil(x), floor(x), min(...), max(...).
+  - Thông số kiểu select: so sánh theo value của option, vd: if(proj.mau_son = "tinh_dien", 1.2, 1.0).
+  - Đầu ra component_param_formula.formula_expression = 1 giá trị thông số linh kiện.
+  - Đầu ra bom_template_line.quantity_formula = số lượng vật tư (biến proj.* — linh/phụ kiện không tác động BOM).
+  - Đầu ra component_sku_applicability.condition_expression = true/false (SKU có khả dụng không).
+  - [OPEN — chờ công ty] Công thức cụ thể chưa chốt; khi có bảng tính chính thức sẽ AI-import
+    và nghiệm thu bằng golden tests (chạy song song Excel ↔ hệ thống, khớp 100% mới go-live).
+
+  # Công thức giá (ẩn với đại lý các phần *hidden*) — tính THEO TỪNG HẠNG MỤC [D1]
+  item.cost_material = Σ(bom_line.qty × material.unit_price)      -- *hidden*
+                     + Σ(item_component.unit_price × quantity)     -- linh kiện cộng thẳng
+                     + Σ(item_accessory.unit_price)                -- phụ kiện (SL luôn = 1)
+  item.applied_gross% = global_gross% (theo sản phẩm)
+                      + (dealer_product_gross% NẾU CÓ, NGƯỢC LẠI dealer.default_gross%)
+  item.import_price = item.cost_material × (1 + applied_gross%/100)
+  item.selling_price ∈ [min_selling_price, max_selling_price] theo sản phẩm [D3][OPEN O1]
+      -- mặc định KHÔNG cho bán dưới giá nhập; cờ hệ thống allow_below_import để nới [OPEN O2]
+  quote.subtotal   = Σ(item.selling_price × item.quantity)
+  quote.vat_amount = subtotal × system VAT% (1 mức chung [D7])
+  quote.total      = subtotal + vat_amount
+
+  # Quy tắc làm tròn (đề xuất — xác nhận với kế toán)
+  - Số lượng giữ 4 số lẻ; MỌI giá trị tiền làm tròn về đồng (0 lẻ) tại từng dòng;
+    các tổng = cộng các giá trị đã làm tròn (không làm tròn lại tổng).
+
+  # Vòng đời giá [D4]
+  - Nháp: không cam kết — hệ thống TÍNH LẠI theo cấu hình mới nhất tại thời điểm phát hành;
+    nếu giá nhập đổi so với nháp, báo đại lý xác nhận lại giá bán.
+  - Đã phát hành (submitted): mọi con số đóng băng vĩnh viễn trong snapshot quote_*.
+
+  # Che giấu dữ liệu mật
+  - cost_material, đơn giá vật tư, dòng BOM, mọi % gross: ẩn hoàn toàn với đại lý.
+  - Yêu cầu THỰC THI Ở TẦNG API (field-level filtering theo role), không chỉ ẩn trên UI.
+  '''
+}
+
+// ---------------------------------------------------------------------
+//  ENUMS
+// ---------------------------------------------------------------------
+Enum user_role {
+  admin   // Tổng công ty: quản trị catalog, thông số, công thức, BOM, vật tư, gross, range
+  dealer  // Đại lý: vận hành pipeline báo giá
+  // [D9] Chỉ 2 vai. Khách cuối KHÔNG truy cập hệ thống.
+}
+
+Enum param_data_type {
+  number
+  text
+  boolean
+  date
+  select
+}
+
+Enum param_input_type {
+  freeform  // nhập tay đúng kiểu dữ liệu
+  dropdown  // chọn từ list option
+}
+
+Enum quote_status {
+  draft      // đang làm dở, cho lưu nháp & quay lại sửa
+  submitted  // đã phát hành (gửi khách + gửi BOM nhà máy) => giá đóng băng [D4]
+  cancelled  // (dự phòng)
+}
+
+// [D1] Phase cấp BÁO GIÁ (thu gọn từ 8 phase tuyến tính của bản gốc,
+// vì các bước cấu hình giờ lặp theo từng hạng mục)
+Enum quote_phase {
+  customer   // Bước 1: khách hàng
+  items      // Bước 2: vòng lặp hạng mục (sản phẩm, ảnh, thông số, linh kiện, phụ kiện)
+  pricing    // Bước 3: tính giá từng hạng mục + chọn giá bán + VAT/tổng
+  finalize   // Bước 4: mock-up AI, PDF, phát hành
+}
+
+// [D1] Bước đang dở của MỘT hạng mục (phục vụ lưu nháp & quay lại)
+Enum item_step {
+  product      // chọn sản phẩm
+  photo        // ảnh hiện trường của hạng mục
+  params       // thông số dự án
+  components   // linh kiện
+  accessories  // phụ kiện
+  done         // hạng mục đã đủ dữ liệu cấu hình
+}
+
+Enum dispatch_channel {
+  api
+  email
+  // [OPEN O4] kênh thực tế chốt sau khi làm việc với bộ phận sản xuất
+}
+
+Enum delivery_status {
+  pending
+  sent
+  failed
+}
+
+// ---------------------------------------------------------------------
+//  0. CẤU HÌNH & THAM CHIẾU HỆ THỐNG
+// ---------------------------------------------------------------------
+Table system_setting {
+  id           bigint       [pk, increment]
+  key          varchar      [unique, not null, note: '''các key chuẩn:
+    vat_percent            — VAT chung toàn hệ thống [D7]
+    ai_max_regenerate      — số lần tạo lại ảnh AI cho MỖI hạng mục (=3) [D6]
+    mockup_required        — ảnh mock-up bắt buộc khi phát hành (mặc định true) [D6]
+    allow_below_import     — cho bán dưới giá nhập (mặc định false) [OPEN O2]
+    quote_validity_days    — số ngày hiệu lực báo giá; trống = không in hạn [OPEN O3]''']
+  value        varchar      [not null]
+  description  varchar
+  updated_at   timestamp
+  updated_by   bigint       [ref: > user_account.id]
+  Note: 'Cấu hình toàn hệ thống. Thay đổi được ghi vào config_audit_log.'
+}
+
+Table unit_of_measure {
+  id    bigint  [pk, increment]
+  code  varchar [unique, not null, note: 'm, m2, kg, bộ, cái...']
+  name  varchar [not null]
+  Note: 'Danh mục đơn vị tính dùng chung cho thông số / linh kiện / vật tư.'
+}
+
+Table config_audit_log {
+  id           bigint    [pk, increment]
+  table_name   varchar   [not null, note: 'bảng cấu hình bị thay đổi']
+  record_id    bigint    [not null]
+  action       varchar   [not null, note: 'create | update | deactivate']
+  change_summary text    [note: 'diff tóm tắt: trường, giá trị cũ → mới']
+  changed_by   bigint    [not null, ref: > user_account.id]
+  changed_at   timestamp [not null]
+  Note: 'Truy vết thay đổi dữ liệu nhạy cảm: đơn giá vật tư/linh kiện/phụ kiện, gross, range, công thức, VAT. Trả lời câu "ai đổi gì lúc nào" khi có khiếu nại giá.'
+}
+
+// ---------------------------------------------------------------------
+//  1. NGƯỜI DÙNG & ĐẠI LÝ
+// ---------------------------------------------------------------------
+Table dealer {
+  id                    bigint        [pk, increment]
+  code                  varchar       [unique, not null]
+  name                  varchar       [not null]
+  phone                 varchar
+  default_gross_percent decimal(7,4)  [not null, default: 0, note: 'Mức gross chung của đại lý (%) - ẩn']
+  is_active             boolean       [not null, default: true]
+  created_at            timestamp
+  Note: 'Đại lý. Sở hữu kho khách hàng riêng và các mức gross theo sản phẩm.'
+}
+
+Table user_account {
+  id            bigint     [pk, increment]
+  role          user_role  [not null]
+  dealer_id     bigint     [ref: > dealer.id, note: 'NULL nếu là admin tổng công ty']
+  full_name     varchar    [not null]
+  email         varchar    [unique]
+  phone         varchar
+  password_hash varchar
+  is_active     boolean    [not null, default: true]
+  created_at    timestamp
+  Note: 'Tài khoản đăng nhập. RBAC 2 vai [D9]. Một đại lý có thể có nhiều tài khoản; các tài khoản cùng đại lý thấy chung dữ liệu của đại lý đó (kho khách, báo giá).'
+}
+
+// ---------------------------------------------------------------------
+//  2. KHÁCH HÀNG (kho khách theo đại lý, định danh bằng SĐT)
+// ---------------------------------------------------------------------
+Table customer {
+  id            bigint   [pk, increment]
+  dealer_id     bigint   [not null, ref: > dealer.id]
+  name          varchar  [not null]
+  phone         varchar  [not null]
+  house_number  varchar  [note: 'Số nhà']
+  street        varchar  [note: 'Tên đường']
+  ward          varchar  [note: 'Phường/Xã']
+  province      varchar  [note: 'Tỉnh/Thành phố']
+  created_at    timestamp
+  updated_at    timestamp
+
+  indexes {
+    (dealer_id, phone) [unique, name: 'uq_customer_dealer_phone']
+  }
+  Note: 'Kho khách của đại lý; chọn lại khách cũ theo SĐT (unique trong phạm vi đại lý). Sửa hồ sơ khách KHÔNG hồi tố báo giá đã phát hành — nhờ snapshot trong quote [F2].'
+}
+
+// ---------------------------------------------------------------------
+//  3. CATALOG SẢN PHẨM & THÔNG SỐ DỰ ÁN (riêng theo sản phẩm)
+// ---------------------------------------------------------------------
+Table category {
+  id         bigint   [pk, increment]
+  parent_id  bigint   [ref: > category.id, note: 'cây danh mục nhiều cấp']
+  name       varchar  [not null]
+  sort_order int      [default: 0]
+  is_active  boolean  [not null, default: true]
+}
+
+Table product {
+  id            bigint   [pk, increment]
+  category_id   bigint   [not null, ref: > category.id]
+  sku           varchar  [unique, not null]
+  name          varchar  [not null]
+  thumbnail_url varchar  [note: 'Lưu ý O7 (đã đóng): nếu màu là thông số chọn lúc báo giá, ảnh dùng cho mock-up AI cần theo màu đã chọn — xử lý khi có catalog thật']
+  description   text
+  is_active     boolean  [not null, default: true]
+  created_at    timestamp
+  Note: 'Sản phẩm gốc, giữ TỐI GIẢN theo triết lý config-driven. Màu sắc/kích thước... là thông số dự án (project_param_def), không phải cột.'
+}
+
+Table project_param_def {
+  id            bigint            [pk, increment]
+  product_id    bigint            [not null, ref: > product.id]
+  code          varchar           [not null, note: 'định danh dùng trong công thức: proj.<code>']
+  name          varchar           [not null, note: 'vd: Chiều dài, Chiều cao, Màu sắc']
+  data_type     param_data_type   [not null]
+  input_type    param_input_type  [not null]
+  unit_id       bigint            [ref: > unit_of_measure.id, note: 'đơn vị tính (nếu có)']
+  is_required   boolean           [not null, default: true]
+  default_value varchar
+  sort_order    int               [default: 0]
+
+  indexes {
+    (product_id, code) [unique, name: 'uq_projparam_product_code']
+  }
+  Note: 'Định nghĩa thông số dự án theo TỪNG sản phẩm — "thiết kế phiếu nhập liệu" mà đại lý điền cho mỗi hạng mục. Thêm thông số mới = thêm dòng, không đổi schema.'
+}
+
+Table project_param_option {
+  id                   bigint   [pk, increment]
+  project_param_def_id bigint   [not null, ref: > project_param_def.id]
+  value                varchar  [not null, note: 'giá trị dùng trong công thức (so sánh bằng if(proj.x = "value",...))']
+  label                varchar
+  sort_order           int      [default: 0]
+  Note: 'List option cho thông số dạng dropdown/select.'
+}
+
+// ---------------------------------------------------------------------
+//  4. LINH KIỆN (loại + thông số + SKU định nghĩa CHUNG toàn hệ thống)
+// ---------------------------------------------------------------------
+Table component_type {
+  id        bigint   [pk, increment]
+  code      varchar  [unique, not null]
+  name      varchar  [not null, note: 'vd: Bộ tời, Ray dẫn hướng']
+  is_active boolean  [not null, default: true]
+  Note: 'Loại linh kiện dùng chung toàn hệ thống, được gán vào từng sản phẩm.'
+}
+
+Table component_param_def {
+  id                bigint            [pk, increment]
+  component_type_id bigint            [not null, ref: > component_type.id]
+  code              varchar           [not null, note: 'dùng trong công thức: comp.<code>']
+  name              varchar           [not null, note: 'vd: Công suất']
+  data_type         param_data_type   [not null]
+  input_type        param_input_type  [not null]
+  unit_id           bigint            [ref: > unit_of_measure.id]
+  is_required       boolean           [not null, default: false]
+  sort_order        int               [default: 0]
+
+  indexes {
+    (component_type_id, code) [unique, name: 'uq_compparam_type_code']
+  }
+  Note: 'Bộ thông số của loại linh kiện (chung toàn hệ thống). Một phần auto-tính, một phần nhập tay.'
+}
+
+Table component_param_option {
+  id                     bigint   [pk, increment]
+  component_param_def_id bigint   [not null, ref: > component_param_def.id]
+  value                  varchar  [not null]
+  label                  varchar
+  sort_order             int      [default: 0]
+}
+
+Table component_sku {
+  id                bigint         [pk, increment]
+  component_type_id bigint         [not null, ref: > component_type.id]
+  sku               varchar        [unique, not null]
+  name              varchar        [not null]
+  unit_price        decimal(18,2)  [not null, note: 'đơn giá linh kiện - thay đổi ghi audit log']
+  uom_id            bigint         [ref: > unit_of_measure.id]
+  is_active         boolean        [not null, default: true]
+  Note: 'Mã linh kiện cụ thể thuộc một loại. Phase linh kiện chỉ hiển thị SKU vượt qua bộ lọc tương thích [D2].'
+}
+
+Table component_sku_param_value {
+  id                     bigint   [pk, increment]
+  component_sku_id       bigint   [not null, ref: > component_sku.id]
+  component_param_def_id bigint   [not null, ref: > component_param_def.id]
+  value                  varchar  [not null]
+
+  indexes {
+    (component_sku_id, component_param_def_id) [unique, name: 'uq_skuparam']
+  }
+  Note: 'Giá trị "thông số mặc định của linh kiện" theo SKU - nguồn biến comp.* cho công thức auto-fill và điều kiện tương thích.'
+}
+
+// ----- Gán sản phẩm <-> loại linh kiện + công thức auto-fill + lọc tương thích -----
+Table product_component_type {
+  id                bigint   [pk, increment]
+  product_id        bigint   [not null, ref: > product.id]
+  component_type_id bigint   [not null, ref: > component_type.id]
+  is_required       boolean  [not null, default: true]
+  sort_order        int      [default: 0]
+
+  indexes {
+    (product_id, component_type_id) [unique, name: 'uq_product_comptype']
+  }
+  Note: 'Sản phẩm cần những loại linh kiện nào.'
+}
+
+Table component_param_formula {
+  id                         bigint  [pk, increment]
+  product_component_type_id  bigint  [not null, ref: > product_component_type.id]
+  component_param_def_id     bigint  [not null, ref: > component_param_def.id]
+  formula_expression         text    [not null, note: 'vd: if(proj.height > 3, proj.length * proj.height * 6, proj.length * proj.height * 5)']
+  note                       varchar
+
+  indexes {
+    (product_component_type_id, component_param_def_id) [unique, name: 'uq_compformula']
+  }
+  Note: 'Công thức auto-fill đặt tại cặp sản phẩm↔loại linh kiện: cùng loại linh kiện có thể có công thức khác nhau ở các sản phẩm khác nhau. Đại lý được chỉnh lại giá trị auto-fill.'
+}
+
+Table component_sku_applicability {
+  id                         bigint  [pk, increment]
+  product_component_type_id  bigint  [not null, ref: > product_component_type.id]
+  component_sku_id           bigint  [not null, ref: > component_sku.id]
+  condition_expression       text    [note: 'biểu thức true/false theo proj.* + comp.*, vd: proj.width * proj.height <= 25. NULL = luôn khả dụng cho sản phẩm này.']
+  note                       varchar
+
+  indexes {
+    (product_component_type_id, component_sku_id) [unique, name: 'uq_sku_applicability']
+  }
+  Note: '[D2 - MỚI] Bộ lọc SKU tương thích: Phase linh kiện chỉ hiển thị các SKU có condition đúng với thông số dự án của hạng mục (VD kích thước lớn → chỉ còn 2 bộ tời hợp lệ, đại lý chọn 1). SKU không có dòng nào ở đây = không khả dụng cho sản phẩm; admin phải khai tường minh.'
+}
+
+// ---------------------------------------------------------------------
+//  5. PHỤ KIỆN (tick chọn, số lượng luôn = 1)
+// ---------------------------------------------------------------------
+Table accessory {
+  id            bigint         [pk, increment]
+  name          varchar        [not null]
+  thumbnail_url varchar
+  unit_price    decimal(18,2)  [not null, note: 'thay đổi ghi audit log']
+  is_active     boolean        [not null, default: true]
+  Note: 'Phụ kiện dùng chung, gán vào sản phẩm qua product_accessory.'
+}
+
+Table product_accessory {
+  id           bigint  [pk, increment]
+  product_id   bigint  [not null, ref: > product.id]
+  accessory_id bigint  [not null, ref: > accessory.id]
+  sort_order   int     [default: 0]
+
+  indexes {
+    (product_id, accessory_id) [unique, name: 'uq_product_accessory']
+  }
+  Note: 'Danh sách phụ kiện khả dụng của sản phẩm.'
+}
+
+// ---------------------------------------------------------------------
+//  6. VẬT TƯ & BOM TEMPLATE [D10: logic BOM nằm trong hệ thống]
+// ---------------------------------------------------------------------
+Table material {
+  id         bigint         [pk, increment]
+  code       varchar        [unique, not null, note: 'dùng tham chiếu trong quản trị & import từ Excel']
+  name       varchar        [not null]
+  unit_id    bigint         [ref: > unit_of_measure.id]
+  unit_price decimal(18,2)  [not null, note: 'ĐƠN GIÁ hiện hành (1 giá, không lịch sử - MVP) - ẩn với đại lý; thay đổi ghi audit log']
+  is_active  boolean        [not null, default: true]
+  Note: 'Vật tư master do admin quản lý. Chỉ lưu 1 giá hiện hành.'
+}
+
+Table bom_template {
+  id         bigint   [pk, increment]
+  product_id bigint   [not null, ref: > product.id]
+  name       varchar  [not null]
+  is_active  boolean  [not null, default: true]
+  created_at timestamp
+
+  indexes {
+    (product_id) [name: 'idx_bom_product']
+  }
+  Note: '[F4] RÀNG BUỘC: tối đa MỘT template active cho mỗi sản phẩm tại một thời điểm (partial unique index product_id WHERE is_active, hoặc validate tầng app). Template không active = bản nháp/lưu trữ.'
+}
+
+Table bom_template_line {
+  id               bigint  [pk, increment]
+  bom_template_id  bigint  [not null, ref: > bom_template.id]
+  material_id      bigint  [not null, ref: > material.id]
+  quantity_formula text    [not null, note: 'công thức số lượng theo thông số dự án, hỗ trợ rẽ nhánh [D10], vd: if(proj.height > 3, proj.length * 1.15, proj.length * 1.05)']
+  note             varchar
+  sort_order       int     [default: 0]
+  Note: 'Dòng vật tư trong BOM mẫu; số lượng tính bằng công thức từ thông số dự án (linh/phụ kiện KHÔNG tác động BOM). [OPEN — chờ công ty] Nội dung cụ thể sẽ AI-import từ bảng tính chính thức + golden tests.'
+}
+
+// ---------------------------------------------------------------------
+//  7. CẤU HÌNH GIÁ (gross theo sản phẩm + range min-max + gross đại lý)
+// ---------------------------------------------------------------------
+Table product_pricing_config {
+  id                   bigint         [pk, increment]
+  product_id           bigint         [unique, not null, ref: > product.id]
+  global_gross_percent decimal(7,4)   [not null, default: 0, note: 'Gross toàn hệ thống cho sản phẩm (%) - ẩn']
+  min_selling_price    decimal(18,2)  [note: '[D3] giá bán tối thiểu [OPEN O1: giá trị chờ công ty ban hành]']
+  max_selling_price    decimal(18,2)  [note: '[D3] giá bán tối đa [OPEN O1]']
+  Note: '[D3] Range giá bình ổn CHỈ dùng một cơ chế min–max (đã bỏ band_percent). Validate: min <= max. Cùng để trống = không giới hạn range, nhưng vẫn áp sàn "giá bán >= giá nhập" trừ khi allow_below_import bật [OPEN O2].'
+}
+
+Table dealer_product_gross {
+  id            bigint        [pk, increment]
+  dealer_id     bigint        [not null, ref: > dealer.id]
+  product_id    bigint        [not null, ref: > product.id]
+  gross_percent decimal(7,4)  [not null, note: 'Gross riêng của đại lý cho sản phẩm này - THAY THẾ default_gross của đại lý (không cộng dồn)']
+
+  indexes {
+    (dealer_id, product_id) [unique, name: 'uq_dealer_product_gross']
+  }
+  Note: 'Nếu tồn tại dòng này -> dùng thay cho dealer.default_gross_percent khi tính giá nhập.'
+}
+
+// ---------------------------------------------------------------------
+//  8. BÁO GIÁ [D1: nhiều hạng mục] + SNAPSHOT
+// ---------------------------------------------------------------------
+Table quote {
+  id             bigint        [pk, increment]
+  code           varchar       [unique, not null, note: 'quy tắc đánh số: <mã đại lý>-<năm>-<số chạy> (đề xuất)']
+  dealer_id      bigint        [not null, ref: > dealer.id]
+  created_by     bigint        [ref: > user_account.id]
+  customer_id    bigint        [not null, ref: > customer.id]
+  status         quote_status  [not null, default: 'draft']
+  current_phase  quote_phase   [not null, default: 'customer', note: 'bước đang dở để lưu nháp & quay lại [D1: 4 bước]']
+
+  // ----- [F2] snapshot khách hàng tại thời điểm phát hành -----
+  customer_name_snapshot    varchar [note: 'chốt khi phát hành; sửa hồ sơ khách sau đó không hồi tố']
+  customer_phone_snapshot   varchar
+  customer_address_snapshot varchar [note: 'gộp số nhà/đường/phường/tỉnh thành một chuỗi']
+
+  // ----- tổng tiền cấp báo giá (chi tiết giá nằm ở quote_item) -----
+  subtotal_amount decimal(18,2) [note: 'Σ(item.selling_price × item.quantity)']
+  vat_percent     decimal(7,4)  [note: 'snapshot VAT toàn hệ thống [D7]']
+  vat_amount      decimal(18,2)
+  total_amount    decimal(18,2) [note: 'subtotal + vat_amount']
+
+  valid_until    date          [note: '[OPEN O3] ngày hết hiệu lực = ngày phát hành + quote_validity_days; NULL nếu chưa cấu hình']
+  quote_pdf_url  varchar       [note: 'file PDF gửi khách (gồm mọi hạng mục)']
+  created_at     timestamp
+  submitted_at   timestamp
+  Note: '[D1] Một báo giá = một khách + NHIỀU hạng mục sản phẩm. [D4] Phát hành: tính lại toàn bộ theo cấu hình mới nhất, chốt snapshot, sau đó đóng băng vĩnh viễn.'
+}
+
+Table quote_item {
+  id          bigint   [pk, increment]
+  quote_id    bigint   [not null, ref: > quote.id]
+  line_no     int      [not null, note: 'thứ tự hạng mục trong báo giá']
+  product_id  bigint   [ref: > product.id]
+
+  // ----- [F3] snapshot sản phẩm -----
+  product_sku_snapshot       varchar [note: 'chốt khi phát hành']
+  product_name_snapshot      varchar
+  product_thumbnail_snapshot varchar [note: 'ảnh đã dùng để ghép mock-up']
+
+  quantity    decimal(18,4)  [not null, default: 1, note: '[D1] số lượng của hạng mục (VD 2 cửa giống hệt nhau)']
+  field_photo_url varchar    [note: '[F1] ảnh hiện trường CỦA HẠNG MỤC (mỗi cửa một vị trí lắp) - NULL khi nháp, BẮT BUỘC trước khi phát hành; 1 ảnh, ≤ 8MB, có kiểm tra độ phân giải tối thiểu [D6]']
+  step        item_step      [not null, default: 'product', note: 'bước đang dở của hạng mục']
+
+  // ----- snapshot giá THEO HẠNG MỤC (một phần ẩn với đại lý) -----
+  cost_material         decimal(18,2) [note: 'ẩn - NVL(BOM) + linh kiện + phụ kiện (cho 1 đơn vị)']
+  applied_gross_percent decimal(7,4)  [note: 'ẩn - global% + dealer% đã resolve']
+  import_price          decimal(18,2) [note: 'giá nhập 1 đơn vị - đại lý XEM ĐƯỢC']
+  selling_price         decimal(18,2) [note: 'giá bán 1 đơn vị đại lý chọn trong [min,max]']
+  line_total            decimal(18,2) [note: 'selling_price × quantity']
+
+  ai_generation_count int     [not null, default: 0, note: '[D6] số lần đã tạo ảnh AI cho hạng mục này (tối đa ai_max_regenerate); reset khi thay ảnh hiện trường']
+  no_mockup_reason    varchar [note: '[D6] lý do bắt buộc khi phát hành hạng mục không kèm mock-up; có log để công ty giám sát']
+
+  indexes {
+    (quote_id, line_no) [unique, name: 'uq_quote_item_line']
+  }
+  Note: '[D1 - MỚI] Hạng mục báo giá: một dòng sản phẩm với cấu hình + giá riêng. Toàn bộ nhóm snapshot bên dưới treo theo hạng mục.'
+}
+
+Table quote_item_param {
+  id                   bigint   [pk, increment]
+  quote_item_id        bigint   [not null, ref: > quote_item.id]
+  project_param_def_id bigint   [ref: > project_param_def.id, note: 'tham chiếu định nghĩa gốc']
+  param_code           varchar  [not null, note: 'snapshot code']
+  param_name           varchar  [not null, note: 'snapshot tên']
+  value                varchar  [not null]
+  unit                 varchar  [note: 'snapshot đơn vị']
+  Note: 'Giá trị thông số dự án đã nhập cho hạng mục - snapshot để không lệ thuộc thay đổi cấu hình sau này.'
+}
+
+Table quote_item_component {
+  id                bigint         [pk, increment]
+  quote_item_id     bigint         [not null, ref: > quote_item.id]
+  component_type_id bigint         [ref: > component_type.id]
+  component_sku_id  bigint         [ref: > component_sku.id, note: 'SKU đại lý chọn trong danh sách ĐÃ LỌC tương thích [D2]']
+  sku               varchar        [note: 'snapshot']
+  name              varchar        [note: 'snapshot']
+  unit_price        decimal(18,2)  [note: 'snapshot đơn giá']
+  uom               varchar
+  quantity          decimal(18,4)  [not null, default: 1]
+  line_total        decimal(18,2)  [note: 'unit_price × quantity - cộng thẳng vào cost_material']
+  Note: 'Linh kiện đã chọn cho hạng mục.'
+}
+
+Table quote_item_component_param {
+  id                       bigint   [pk, increment]
+  quote_item_component_id  bigint   [not null, ref: > quote_item_component.id]
+  component_param_def_id   bigint   [ref: > component_param_def.id]
+  param_code               varchar  [not null]
+  param_name               varchar  [not null]
+  value                    varchar  [not null, note: 'giá trị auto-fill hoặc đã chỉnh']
+  unit                     varchar
+  is_overridden            boolean  [not null, default: false, note: 'true nếu đại lý sửa khác giá trị auto-fill']
+  Note: 'Thông số của từng linh kiện: một phần auto-tính từ công thức, một phần nhập tay; đại lý chỉnh được.'
+}
+
+Table quote_item_accessory {
+  id            bigint         [pk, increment]
+  quote_item_id bigint         [not null, ref: > quote_item.id]
+  accessory_id  bigint         [ref: > accessory.id]
+  name          varchar        [note: 'snapshot']
+  unit_price    decimal(18,2)  [note: 'snapshot - cộng thẳng vào cost_material (SL = 1)']
+  Note: 'Phụ kiện đã tick chọn cho hạng mục, số lượng luôn = 1.'
+}
+
+Table quote_item_bom_line {
+  id            bigint         [pk, increment]
+  quote_item_id bigint         [not null, ref: > quote_item.id]
+  material_id   bigint         [ref: > material.id]
+  material_name varchar        [note: 'snapshot']
+  unit          varchar
+  quantity      decimal(18,4)  [not null, note: 'kết quả công thức từ thông số dự án (cho 1 đơn vị hạng mục)']
+  unit_price    decimal(18,2)  [note: 'snapshot đơn giá vật tư - ẩn']
+  line_cost     decimal(18,2)  [note: 'quantity × unit_price - ẩn']
+  Note: 'BOM tính ra & lưu ẩn theo hạng mục. Đại lý KHÔNG xem chi tiết. Đây cũng là nguồn phiếu BOM sản xuất gửi nhà máy.'
+}
+
+Table quote_item_ai_image {
+  id            bigint    [pk, increment]
+  quote_item_id bigint    [not null, ref: > quote_item.id]
+  generation_no int       [not null, note: '1..ai_max_regenerate, đếm theo HẠNG MỤC; lần gen lỗi kỹ thuật (không ra ảnh) không tính lượt [D6]']
+  image_url     varchar   [not null]
+  is_selected   boolean   [not null, default: false, note: 'tối đa 1 ảnh được chọn mỗi hạng mục (ràng buộc tầng app) - đính vào PDF']
+  created_at    timestamp
+
+  indexes {
+    (quote_item_id, generation_no) [unique, name: 'uq_item_ai_gen']
+  }
+  Note: '[D6] Ảnh mock-up AI ghép từ ảnh hiện trường CỦA HẠNG MỤC + thumbnail sản phẩm. Thay ảnh hiện trường → reset lượt gen.'
+}
+
+// ---------------------------------------------------------------------
+//  9. GỬI ĐI (khách + BOM về nhà máy) [OPEN O4, O5]
+// ---------------------------------------------------------------------
+Table customer_delivery {
+  id              bigint          [pk, increment]
+  quote_id        bigint          [not null, ref: > quote.id]
+  channel         varchar         [not null, default: 'zalo_oa', note: '[OPEN O5] kênh gửi khách chốt cùng quyết định nền tảng; đại lý luôn tải được PDF để gửi thủ công']
+  recipient_phone varchar
+  status          delivery_status [not null, default: 'pending']
+  sent_at         timestamp
+  error_message   varchar
+  Note: 'Gửi PDF báo giá (kèm ảnh mock-up các hạng mục) cho khách cuối. Cho phép gửi lại khi failed.'
+}
+
+Table factory_bom_dispatch {
+  id            bigint            [pk, increment]
+  quote_id      bigint            [not null, ref: > quote.id]
+  channel       dispatch_channel  [not null, note: '[OPEN O4] api | email - chốt sau khi làm việc với bộ phận sản xuất']
+  status        delivery_status   [not null, default: 'pending']
+  payload_ref   varchar           [note: 'tham chiếu payload/BOM đã gửi (gộp BOM mọi hạng mục × số lượng)']
+  dispatched_at timestamp
+  error_message varchar
+  Note: 'Gửi phiếu BOM sản xuất về nhà máy. [OPEN O4] format phiếu, định tuyến nhà máy nào, có xác nhận ngược không — chờ chốt.'
+}
+
+// ---------------------------------------------------------------------
+//  TABLE GROUPS
+// ---------------------------------------------------------------------
+TableGroup "0. Cấu hình & tham chiếu" {
+  system_setting
+  unit_of_measure
+  config_audit_log
+}
+TableGroup "1. Người dùng & đại lý" {
+  dealer
+  user_account
+}
+TableGroup "2. Khách hàng" {
+  customer
+}
+TableGroup "3. Catalog & thông số dự án" {
+  category
+  product
+  project_param_def
+  project_param_option
+}
+TableGroup "4. Linh kiện, auto-fill & tương thích" {
+  component_type
+  component_param_def
+  component_param_option
+  component_sku
+  component_sku_param_value
+  product_component_type
+  component_param_formula
+  component_sku_applicability
+}
+TableGroup "5. Phụ kiện" {
+  accessory
+  product_accessory
+}
+TableGroup "6. Vật tư & BOM" {
+  material
+  bom_template
+  bom_template_line
+}
+TableGroup "7. Cấu hình giá" {
+  product_pricing_config
+  dealer_product_gross
+}
+TableGroup "8. Báo giá & snapshot" {
+  quote
+  quote_item
+  quote_item_param
+  quote_item_component
+  quote_item_component_param
+  quote_item_accessory
+  quote_item_bom_line
+  quote_item_ai_image
+}
+TableGroup "9. Gửi đi" {
+  customer_delivery
+  factory_bom_dispatch
+}

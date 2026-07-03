@@ -1,0 +1,558 @@
+// =====================================================================
+//  ADG CPQ - Hệ thống báo giá tự động cho đại lý
+//  ERD (DBML) - import trực tiếp vào https://dbdiagram.io
+//
+//  Nguyên tắc thiết kế mở rộng (config-driven, không cần dev):
+//   - Thông số dự án / thông số linh kiện lưu theo mô hình định-nghĩa +
+//     giá-trị (def/value). Thêm SKU hay bộ thông số mới = thêm dữ liệu
+//     cấu hình, KHÔNG cần đổi schema.
+//   - Công thức auto-fill & công thức BOM lưu dạng biểu thức (text),
+//     tham chiếu tới `code` ổn định của thông số/vật tư => admin sửa
+//     công thức mà không đụng code.
+//   - Mọi giá trị nhạy cảm (cost_material, đơn giá vật tư, % gross) chỉ
+//     nằm ở tầng cấu hình / snapshot ẩn; đại lý chỉ đọc giá nhập, range,
+//     giá bán, VAT.
+// =====================================================================
+
+Project ADG_CPQ {
+  database_type: 'PostgreSQL'
+  Note: '''
+  # Quy ước công thức
+  - Biến trong công thức tham chiếu bằng `code`:
+      * Thông số dự án:     proj.<project_param_def.code>
+      * Thông số mặc định linh kiện: comp.<component_param_def.code>
+  - `component_param_formula.formula_expression`: đầu ra = 1 giá trị thông số linh kiện.
+  - `bom_template_line.quantity_formula`: đầu ra = số lượng vật tư (chỉ dùng biến proj.*).
+
+  # Công thức giá (ẩn với đại lý các phần *hidden*)
+  cost_material = Σ(bom_line.qty × material.unit_price)      -- *hidden*
+               + Σ(quote_component.unit_price × quantity)     -- linh kiện cộng thẳng
+               + Σ(quote_accessory.unit_price)                -- phụ kiện (SL luôn = 1)
+  applied_gross% = global_gross% (theo sản phẩm)
+                 + (dealer_product_gross% NẾU CÓ, NGƯỢC LẠI dealer.default_gross%)
+  import_price (giá nhập) = cost_material × (1 + applied_gross%/100)
+  selling_price ∈ range theo sản phẩm (±% và/hoặc min/max) tính trên import_price
+  vat_amount = selling_price × system VAT% (1 mức chung toàn hệ thống)
+  total = selling_price + vat_amount
+  '''
+}
+
+// ---------------------------------------------------------------------
+//  ENUMS
+// ---------------------------------------------------------------------
+Enum user_role {
+  admin   // Tổng công ty: quản trị catalog, thông số, công thức, BOM, vật tư, gross, range
+  dealer  // Đại lý: vận hành pipeline báo giá
+}
+
+Enum param_data_type {
+  number
+  text
+  boolean
+  date
+  select
+}
+
+Enum param_input_type {
+  freeform  // nhập tay đúng kiểu dữ liệu
+  dropdown  // chọn từ list option
+}
+
+Enum quote_status {
+  draft      // đang làm dở, cho lưu nháp & quay lại sửa phase trước
+  submitted  // đã gửi khách + gửi BOM nhà máy => kết thúc
+  cancelled  // (dự phòng)
+}
+
+Enum quote_phase {
+  customer        // Phase 1
+  product         // Phase 2
+  project_params  // Phase 3
+  components       // Phase 4
+  accessories      // Phase 5
+  bom              // Phase 6
+  pricing          // Phase 7
+  finalize         // Phase 8
+}
+
+Enum dispatch_channel {
+  api
+  email
+}
+
+Enum delivery_status {
+  pending
+  sent
+  failed
+}
+
+// ---------------------------------------------------------------------
+//  0. CẤU HÌNH & THAM CHIẾU HỆ THỐNG
+// ---------------------------------------------------------------------
+Table system_setting {
+  id           bigint       [pk, increment]
+  key          varchar      [unique, not null, note: 'vd: vat_percent, ai_max_regenerate']
+  value        varchar      [not null]
+  description  varchar
+  updated_at   timestamp
+  Note: 'Cấu hình toàn hệ thống. VAT (1 mức chung) và số lần tạo lại ảnh AI (=3) lưu ở đây.'
+}
+
+Table unit_of_measure {
+  id    bigint  [pk, increment]
+  code  varchar [unique, not null, note: 'm, m2, kg, bộ, cái...']
+  name  varchar [not null]
+  Note: 'Danh mục đơn vị tính dùng chung cho thông số / linh kiện / vật tư.'
+}
+
+// ---------------------------------------------------------------------
+//  1. NGƯỜI DÙNG & ĐẠI LÝ
+// ---------------------------------------------------------------------
+Table dealer {
+  id                    bigint        [pk, increment]
+  code                  varchar       [unique, not null]
+  name                  varchar       [not null]
+  phone                 varchar
+  default_gross_percent decimal(7,4)  [not null, default: 0, note: 'Mức gross chung của đại lý (%)']
+  is_active             boolean       [not null, default: true]
+  created_at            timestamp
+  Note: 'Đại lý. Sở hữu kho khách hàng riêng và các mức gross theo sản phẩm.'
+}
+
+Table user_account {
+  id            bigint     [pk, increment]
+  role          user_role  [not null]
+  dealer_id     bigint     [ref: > dealer.id, note: 'NULL nếu là admin tổng công ty']
+  full_name     varchar    [not null]
+  email         varchar    [unique]
+  phone         varchar
+  password_hash varchar
+  is_active     boolean    [not null, default: true]
+  created_at    timestamp
+  Note: 'Tài khoản đăng nhập. RBAC tối giản: admin | dealer (mở rộng role sau này không đổi schema).'
+}
+
+// ---------------------------------------------------------------------
+//  2. KHÁCH HÀNG (kho khách theo đại lý, định danh bằng SĐT)
+// ---------------------------------------------------------------------
+Table customer {
+  id            bigint   [pk, increment]
+  dealer_id     bigint   [not null, ref: > dealer.id]
+  name          varchar  [not null]
+  phone         varchar  [not null]
+  house_number  varchar  [note: 'Số nhà']
+  street        varchar  [note: 'Tên đường']
+  ward          varchar  [note: 'Phường/Xã']
+  province      varchar  [note: 'Tỉnh/Thành phố']
+  created_at    timestamp
+  updated_at    timestamp
+
+  indexes {
+    (dealer_id, phone) [unique, name: 'uq_customer_dealer_phone']
+  }
+  Note: 'Kho khách của đại lý; chọn lại khách cũ theo SĐT (unique trong phạm vi đại lý).'
+}
+
+// ---------------------------------------------------------------------
+//  3. CATALOG SẢN PHẨM & THÔNG SỐ DỰ ÁN (riêng theo sản phẩm)
+// ---------------------------------------------------------------------
+Table category {
+  id         bigint   [pk, increment]
+  parent_id  bigint   [ref: > category.id, note: 'cây danh mục nhiều cấp']
+  name       varchar  [not null]
+  sort_order int      [default: 0]
+  is_active  boolean  [not null, default: true]
+}
+
+Table product {
+  id            bigint   [pk, increment]
+  category_id   bigint   [not null, ref: > category.id]
+  sku           varchar  [unique, not null]
+  name          varchar  [not null]
+  thumbnail_url varchar
+  description   text
+  is_active     boolean  [not null, default: true]
+  created_at    timestamp
+  Note: 'Sản phẩm gốc. Mỗi sản phẩm tự khai bộ thông số dự án, danh sách loại linh kiện, phụ kiện, BOM, cấu hình giá riêng.'
+}
+
+Table project_param_def {
+  id            bigint            [pk, increment]
+  product_id    bigint            [not null, ref: > product.id]
+  code          varchar           [not null, note: 'định danh dùng trong công thức: proj.<code>']
+  name          varchar           [not null, note: 'vd: Chiều dài, Chiều cao, Màu sắc']
+  data_type     param_data_type   [not null]
+  input_type    param_input_type  [not null]
+  unit_id       bigint            [ref: > unit_of_measure.id, note: 'đơn vị tính (nếu có)']
+  is_required   boolean           [not null, default: true]
+  default_value varchar
+  sort_order    int               [default: 0]
+
+  indexes {
+    (product_id, code) [unique, name: 'uq_projparam_product_code']
+  }
+  Note: 'Định nghĩa thông số dự án theo TỪNG sản phẩm (Phase 3). Thêm thông số mới = thêm dòng, không đổi schema.'
+}
+
+Table project_param_option {
+  id                   bigint   [pk, increment]
+  project_param_def_id bigint   [not null, ref: > project_param_def.id]
+  value                varchar  [not null]
+  label                varchar
+  sort_order           int      [default: 0]
+  Note: 'List option cho thông số dạng dropdown/select.'
+}
+
+// ---------------------------------------------------------------------
+//  4. LINH KIỆN (loại + thông số + SKU định nghĩa CHUNG toàn hệ thống)
+// ---------------------------------------------------------------------
+Table component_type {
+  id        bigint   [pk, increment]
+  code      varchar  [unique, not null]
+  name      varchar  [not null, note: 'vd: Bộ tời, Ray dẫn hướng']
+  is_active boolean  [not null, default: true]
+  Note: 'Loại linh kiện dùng chung toàn hệ thống, được gán vào từng sản phẩm.'
+}
+
+Table component_param_def {
+  id                bigint            [pk, increment]
+  component_type_id bigint            [not null, ref: > component_type.id]
+  code              varchar           [not null, note: 'dùng trong công thức: comp.<code>']
+  name              varchar           [not null, note: 'vd: Công suất']
+  data_type         param_data_type   [not null]
+  input_type        param_input_type  [not null]
+  unit_id           bigint            [ref: > unit_of_measure.id]
+  is_required       boolean           [not null, default: false]
+  sort_order        int               [default: 0]
+
+  indexes {
+    (component_type_id, code) [unique, name: 'uq_compparam_type_code']
+  }
+  Note: 'Bộ thông số của loại linh kiện (chung toàn hệ thống). Một phần có thể auto-tính, một phần nhập tay.'
+}
+
+Table component_param_option {
+  id                     bigint   [pk, increment]
+  component_param_def_id bigint   [not null, ref: > component_param_def.id]
+  value                  varchar  [not null]
+  label                  varchar
+  sort_order             int      [default: 0]
+}
+
+Table component_sku {
+  id                bigint         [pk, increment]
+  component_type_id bigint         [not null, ref: > component_type.id]
+  sku               varchar        [unique, not null]
+  name              varchar        [not null]
+  unit_price        decimal(18,2)  [not null, note: 'đơn giá linh kiện']
+  uom_id            bigint         [ref: > unit_of_measure.id]
+  is_active         boolean        [not null, default: true]
+  Note: 'Mã linh kiện cụ thể thuộc một loại. Đại lý tự chọn SKU (hệ thống KHÔNG gợi ý SKU).'
+}
+
+Table component_sku_param_value {
+  id                     bigint   [pk, increment]
+  component_sku_id       bigint   [not null, ref: > component_sku.id]
+  component_param_def_id bigint   [not null, ref: > component_param_def.id]
+  value                  varchar  [not null]
+
+  indexes {
+    (component_sku_id, component_param_def_id) [unique, name: 'uq_skuparam']
+  }
+  Note: 'Giá trị "thông số mặc định của linh kiện" theo SKU - dùng làm biến comp.* trong công thức auto-fill.'
+}
+
+// ----- Gán sản phẩm <-> loại linh kiện + CÔNG THỨC auto-fill (theo sản phẩm) -----
+Table product_component_type {
+  id                bigint   [pk, increment]
+  product_id        bigint   [not null, ref: > product.id]
+  component_type_id bigint   [not null, ref: > component_type.id]
+  is_required       boolean  [not null, default: true]
+  sort_order        int      [default: 0]
+
+  indexes {
+    (product_id, component_type_id) [unique, name: 'uq_product_comptype']
+  }
+  Note: 'Sản phẩm cần những loại linh kiện nào (Phase 4).'
+}
+
+Table component_param_formula {
+  id                       bigint  [pk, increment]
+  product_component_type_id bigint [not null, ref: > product_component_type.id]
+  component_param_def_id   bigint  [not null, ref: > component_param_def.id]
+  formula_expression       text    [not null, note: 'vd: proj.length * proj.height * 5 ; đầu ra = giá trị thông số linh kiện']
+  note                     varchar
+
+  indexes {
+    (product_component_type_id, component_param_def_id) [unique, name: 'uq_compformula']
+  }
+  Note: 'CÔNG THỨC auto-fill đặt tại chỗ gán sản phẩm↔loại linh kiện. Mỗi sản phẩm khai công thức riêng cho thông số linh kiện của nó. Đại lý được chỉnh lại giá trị auto-fill.'
+}
+
+// ---------------------------------------------------------------------
+//  5. PHỤ KIỆN (tick chọn, số lượng luôn = 1)
+// ---------------------------------------------------------------------
+Table accessory {
+  id            bigint         [pk, increment]
+  name          varchar        [not null]
+  thumbnail_url varchar
+  unit_price    decimal(18,2)  [not null]
+  is_active     boolean        [not null, default: true]
+  Note: 'Phụ kiện dùng chung, gán vào sản phẩm qua product_accessory.'
+}
+
+Table product_accessory {
+  id           bigint  [pk, increment]
+  product_id   bigint  [not null, ref: > product.id]
+  accessory_id bigint  [not null, ref: > accessory.id]
+  sort_order   int     [default: 0]
+
+  indexes {
+    (product_id, accessory_id) [unique, name: 'uq_product_accessory']
+  }
+  Note: 'Danh sách phụ kiện khả dụng của sản phẩm (Phase 5).'
+}
+
+// ---------------------------------------------------------------------
+//  6. VẬT TƯ & BOM TEMPLATE (công thức tính số lượng theo thông số dự án)
+// ---------------------------------------------------------------------
+Table material {
+  id         bigint         [pk, increment]
+  code       varchar        [unique, not null, note: 'dùng tham chiếu trong quản trị']
+  name       varchar        [not null]
+  unit_id    bigint         [ref: > unit_of_measure.id]
+  unit_price decimal(18,2)  [not null, note: 'ĐƠN GIÁ hiện hành (1 giá, không lịch sử) - ẩn với đại lý']
+  is_active  boolean        [not null, default: true]
+  Note: 'Vật tư master do admin quản lý. Chỉ lưu 1 giá hiện hành.'
+}
+
+Table bom_template {
+  id         bigint   [pk, increment]
+  product_id bigint   [not null, ref: > product.id]
+  name       varchar  [not null]
+  is_active  boolean  [not null, default: true]
+  created_at timestamp
+
+  indexes {
+    (product_id) [name: 'idx_bom_product']
+  }
+  Note: 'BOM mẫu theo TỪNG sản phẩm. Admin tạo/sửa không cần dev.'
+}
+
+Table bom_template_line {
+  id              bigint         [pk, increment]
+  bom_template_id bigint         [not null, ref: > bom_template.id]
+  material_id     bigint         [not null, ref: > material.id]
+  quantity_formula text          [not null, note: 'công thức số lượng theo thông số dự án, vd: proj.length * 1.05']
+  note            varchar
+  sort_order      int            [default: 0]
+  Note: 'Dòng vật tư trong BOM mẫu; số lượng tính bằng công thức từ thông số dự án (linh/phụ kiện KHÔNG tác động BOM).'
+}
+
+// ---------------------------------------------------------------------
+//  7. CẤU HÌNH GIÁ (gross toàn hệ thống theo sản phẩm + range + gross đại lý)
+// ---------------------------------------------------------------------
+Table product_pricing_config {
+  id                   bigint         [pk, increment]
+  product_id           bigint         [unique, not null, ref: > product.id]
+  global_gross_percent decimal(7,4)   [not null, default: 0, note: 'Gross toàn hệ thống cho sản phẩm (%) - ẩn']
+  band_percent         decimal(7,4)   [note: '± % quanh giá nhập (không bắt buộc)']
+  band_min_price       decimal(18,2)  [note: 'giá bán tối thiểu (không bắt buộc)']
+  band_max_price       decimal(18,2)  [note: 'giá bán tối đa (không bắt buộc)']
+  Note: 'Range giá bình ổn + global gross theo TỪNG sản phẩm (Phase 7).'
+}
+
+Table dealer_product_gross {
+  id           bigint        [pk, increment]
+  dealer_id    bigint        [not null, ref: > dealer.id]
+  product_id   bigint        [not null, ref: > product.id]
+  gross_percent decimal(7,4) [not null, note: 'Gross riêng của đại lý cho sản phẩm này - THAY THẾ default_gross của đại lý']
+
+  indexes {
+    (dealer_id, product_id) [unique, name: 'uq_dealer_product_gross']
+  }
+  Note: 'Nếu tồn tại dòng này -> dùng thay cho dealer.default_gross_percent khi tính giá nhập.'
+}
+
+// ---------------------------------------------------------------------
+//  8. BÁO GIÁ (1 sản phẩm / báo giá) + SNAPSHOT các phase
+// ---------------------------------------------------------------------
+Table quote {
+  id                 bigint         [pk, increment]
+  code               varchar        [unique, not null]
+  dealer_id          bigint         [not null, ref: > dealer.id]
+  created_by         bigint         [ref: > user_account.id]
+  customer_id        bigint         [not null, ref: > customer.id]
+  product_id         bigint         [not null, ref: > product.id]
+  status             quote_status   [not null, default: 'draft']
+  current_phase      quote_phase    [not null, default: 'customer', note: 'phase đang dở để lưu nháp & quay lại']
+  field_photo_url    varchar        [not null, note: 'ảnh hiện trường - bắt buộc, tối đa 1 ảnh, ≤ 8MB (ràng buộc ở tầng app)']
+
+  // ----- snapshot giá tại thời điểm chốt (một phần ẩn với đại lý) -----
+  cost_material        decimal(18,2) [note: 'ẩn - NVL(BOM) + linh kiện + phụ kiện']
+  applied_gross_percent decimal(7,4) [note: 'ẩn - global% + dealer% đã resolve']
+  import_price         decimal(18,2) [note: 'giá nhập - đại lý XEM ĐƯỢC']
+  selling_price        decimal(18,2) [note: 'giá bán đại lý chọn trong range']
+  vat_percent          decimal(7,4)  [note: 'snapshot VAT toàn hệ thống']
+  vat_amount           decimal(18,2)
+  total_amount         decimal(18,2) [note: 'selling_price + vat_amount']
+
+  ai_generation_count  int           [not null, default: 0, note: 'số lần đã tạo ảnh AI (tối đa 3)']
+  quote_pdf_url        varchar       [note: 'file PDF gửi khách']
+  created_at           timestamp
+  submitted_at         timestamp
+  Note: 'Mỗi báo giá gắn đúng 1 sản phẩm. Lưu nháp + quay lại sửa phase. Gửi xong = kết thúc.'
+}
+
+Table quote_project_param {
+  id                   bigint         [pk, increment]
+  quote_id             bigint         [not null, ref: > quote.id]
+  project_param_def_id bigint         [ref: > project_param_def.id, note: 'tham chiếu định nghĩa gốc']
+  param_code           varchar        [not null, note: 'snapshot code']
+  param_name           varchar        [not null, note: 'snapshot tên']
+  value                varchar        [not null]
+  unit                 varchar        [note: 'snapshot đơn vị']
+  Note: 'Giá trị thông số dự án đã nhập (Phase 3) - snapshot để không lệ thuộc thay đổi cấu hình sau này.'
+}
+
+Table quote_component {
+  id                bigint         [pk, increment]
+  quote_id          bigint         [not null, ref: > quote.id]
+  component_type_id bigint         [ref: > component_type.id]
+  component_sku_id  bigint         [ref: > component_sku.id, note: 'SKU đại lý chọn']
+  sku               varchar        [note: 'snapshot']
+  name              varchar        [note: 'snapshot']
+  unit_price        decimal(18,2)  [note: 'snapshot đơn giá']
+  uom               varchar
+  quantity          decimal(18,4)  [not null, default: 1]
+  line_total        decimal(18,2)  [note: 'unit_price × quantity - cộng thẳng vào cost_material']
+  Note: 'Linh kiện đã chọn cho báo giá (Phase 4).'
+}
+
+Table quote_component_param {
+  id                     bigint         [pk, increment]
+  quote_component_id     bigint         [not null, ref: > quote_component.id]
+  component_param_def_id bigint         [ref: > component_param_def.id]
+  param_code             varchar        [not null]
+  param_name             varchar        [not null]
+  value                  varchar        [not null, note: 'giá trị auto-fill hoặc đã chỉnh']
+  unit                   varchar
+  is_overridden          boolean        [not null, default: false, note: 'true nếu đại lý sửa khác giá trị auto-fill']
+  Note: 'Thông số của từng linh kiện: một phần auto-tính từ công thức, một phần nhập tay; đại lý chỉnh được.'
+}
+
+Table quote_accessory {
+  id           bigint         [pk, increment]
+  quote_id     bigint         [not null, ref: > quote.id]
+  accessory_id bigint         [ref: > accessory.id]
+  name         varchar        [note: 'snapshot']
+  unit_price   decimal(18,2)  [note: 'snapshot - cộng thẳng vào cost_material (SL = 1)']
+  Note: 'Phụ kiện đã tick chọn (Phase 5), số lượng luôn = 1.'
+}
+
+Table quote_bom_line {
+  id            bigint         [pk, increment]
+  quote_id      bigint         [not null, ref: > quote.id]
+  material_id   bigint         [ref: > material.id]
+  material_name varchar        [note: 'snapshot']
+  unit          varchar
+  quantity      decimal(18,4)  [not null, note: 'kết quả công thức từ thông số dự án']
+  unit_price    decimal(18,2)  [note: 'snapshot đơn giá vật tư - ẩn']
+  line_cost     decimal(18,2)  [note: 'quantity × unit_price - ẩn']
+  Note: 'BOM tính ra & lưu ẩn sau hệ thống (Phase 6). Đại lý KHÔNG xem chi tiết.'
+}
+
+Table quote_ai_image {
+  id            bigint    [pk, increment]
+  quote_id      bigint    [not null, ref: > quote.id]
+  generation_no int       [not null, note: '1..3']
+  image_url     varchar   [not null]
+  is_selected   boolean   [not null, default: false, note: 'ảnh đại lý duyệt để đính vào PDF']
+  created_at    timestamp
+
+  indexes {
+    (quote_id, generation_no) [unique, name: 'uq_quote_ai_gen']
+  }
+  Note: 'Ảnh mock-up AI ghép từ ảnh hiện trường + thumbnail sản phẩm (Phase 8). Đại lý duyệt/tạo lại tối đa 3 lần.'
+}
+
+// ---------------------------------------------------------------------
+//  9. GỬI ĐI (khách qua Zalo OA + BOM về nhà máy)
+// ---------------------------------------------------------------------
+Table customer_delivery {
+  id              bigint          [pk, increment]
+  quote_id        bigint          [not null, ref: > quote.id]
+  channel         varchar         [not null, default: 'zalo_oa']
+  recipient_phone varchar
+  status          delivery_status [not null, default: 'pending']
+  sent_at         timestamp
+  error_message   varchar
+  Note: 'Gửi PDF báo giá (kèm ảnh mock-up) cho khách cuối qua Zalo OA.'
+}
+
+Table factory_bom_dispatch {
+  id            bigint            [pk, increment]
+  quote_id      bigint            [not null, ref: > quote.id]
+  channel       dispatch_channel  [not null, note: 'api | email - trợ lý hoàn thiện cổng nhà máy']
+  status        delivery_status   [not null, default: 'pending']
+  payload_ref   varchar           [note: 'tham chiếu payload/BOM đã gửi']
+  dispatched_at timestamp
+  error_message varchar
+  Note: 'Gửi phiếu BOM về nhà máy sản xuất (Phase 8).'
+}
+
+// ---------------------------------------------------------------------
+//  TABLE GROUPS (gom nhóm cho dễ nhìn trên dbdiagram)
+// ---------------------------------------------------------------------
+TableGroup "0. Cấu hình & tham chiếu" {
+  system_setting
+  unit_of_measure
+}
+TableGroup "1. Người dùng & đại lý" {
+  dealer
+  user_account
+}
+TableGroup "2. Khách hàng" {
+  customer
+}
+TableGroup "3. Catalog & thông số dự án" {
+  category
+  product
+  project_param_def
+  project_param_option
+}
+TableGroup "4. Linh kiện & công thức auto-fill" {
+  component_type
+  component_param_def
+  component_param_option
+  component_sku
+  component_sku_param_value
+  product_component_type
+  component_param_formula
+}
+TableGroup "5. Phụ kiện" {
+  accessory
+  product_accessory
+}
+TableGroup "6. Vật tư & BOM" {
+  material
+  bom_template
+  bom_template_line
+}
+TableGroup "7. Cấu hình giá" {
+  product_pricing_config
+  dealer_product_gross
+}
+TableGroup "8. Báo giá & snapshot" {
+  quote
+  quote_project_param
+  quote_component
+  quote_component_param
+  quote_accessory
+  quote_bom_line
+  quote_ai_image
+}
+TableGroup "9. Gửi đi" {
+  customer_delivery
+  factory_bom_dispatch
+}

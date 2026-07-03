@@ -1,0 +1,19 @@
+# Dependencies & build (cho giai đoạn code sau này)
+node_modules/
+dist/
+build/
+*.log
+
+# Môi trường & bí mật
+.env
+.env.*
+!.env.example
+
+# IDE & OS
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
+
+# BMAD - file tạm phiên làm việc (giữ lại _bmad-output vì là artifact dự án)
+_bmad/_memory/
