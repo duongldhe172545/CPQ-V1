@@ -1,6 +1,4 @@
-# ADG CPQ — Tóm tắt thay đổi tài liệu (v1 → v3)
-
-> **v3 (03/07/2026):** giống hệt v2, chỉ cập nhật lại **mục ③** — BOM không import logic vào hệ thống nữa mà tính bằng chính file Excel của công ty qua cổng INPUT/OUTPUT.
+# ADG CPQ — Tóm tắt thay đổi tài liệu (v1 → v2)
 
 ## 1. Năm thay đổi lớn nhất (đọc kỹ nếu chỉ đọc một mục)
 
@@ -15,12 +13,10 @@
 - **v2:** admin cấu hình điều kiện tương thích (VD: bộ tời X chỉ dùng cho diện tích ≤ 25m²); hệ thống **chỉ hiển thị các SKU hợp lệ** theo thông số đã nhập, đại lý chọn trong số đó.
 - **Lý do:** chọn sai linh kiện → BOM sai gửi thẳng về nhà máy. Rủi ro này không thể để sau MVP.
 
-### ③ BOM tính bằng CHÍNH FILE EXCEL của công ty [D14 — v3, đảo phương án cũ]
+### ③ Toàn bộ logic tính BOM nằm TRONG hệ thống [D10]
 - Câu hỏi lớn: logic tính vật tư đang nằm trong file Excel phức tạp của công ty — đẩy vào hệ thống hay để hệ thống gọi Excel?
-- **Chốt (v3):** KHÔNG import logic vào hệ thống. Hệ thống chỉ làm việc qua **hợp đồng INPUT/OUTPUT**: bơm thông số (cao, rộng...) vào sheet INPUT của file, đọc kết quả (mã vật tư + số lượng) từ sheet OUTPUT. Logic tính **nằm nguyên trong file Excel** — đội làm giá tiếp tục làm việc trên file quen thuộc.
-- Đổi lại, file được kiểm soát chặt: **upload lên hệ thống có phiên bản + checksum**, và chỉ phiên bản vượt **nghiệm thu bộ ca mẫu** (so kết quả với đáp án người làm giá xác nhận, khớp 100%) mới được dùng tính giá thật. Sửa logic = sửa file → upload phiên bản mới → nghiệm thu lại.
-- Ngôn ngữ công thức trong hệ thống vẫn tồn tại nhưng **chỉ dùng cho** auto-fill thông số linh kiện và điều kiện lọc SKU tương thích (mục ②).
-- Còn chờ xem file thật: OUTPUT chỉ trả số lượng (đơn giá vẫn quản lý trong hệ thống — khuyến nghị) hay trả cả tiền.
+- **Chốt (làm rõ 03/07):** đẩy toàn bộ vào hệ thống. Khi công ty chốt bảng tính chính thức, **IT/Data Analyst ngồi đọc file Excel và nhập công thức vào hệ thống**, rồi nghiệm thu bằng **"golden tests"** — chạy song song Excel với hệ thống trên hàng loạt bộ thông số thật, khớp 100% mới đưa vào sử dụng. Sau đó **hệ thống là nguồn chân lý duy nhất**, sửa công thức = sửa trên hệ thống (có ghi vết).
+- Ngôn ngữ công thức được đặc tả để gánh mọi công thức của Excel giá thật: **rẽ nhánh điều kiện** (VD: "cao trên 3m thì dùng định mức khác"), **bảng tra** (thay VLOOKUP/ma trận định mức) và **biến trung gian** (thay ô-tham-chiếu-ô) — bản v1 hoàn toàn không đặc tả điều này.
 
 ### ④ Giá cả có kỷ luật vòng đời rõ ràng [D3][D4][D5]
 - Khoảng giá bán cho đại lý chỉ còn **một cơ chế min–max** do công ty quy định (bỏ cơ chế ±% chồng chéo của v1).
@@ -60,8 +56,7 @@ Ngoài ra v2 bổ sung: quy tắc làm tròn tiền VND, hạn hiệu lực báo
 | O3 | Báo giá có hiệu lực bao nhiêu ngày? (hiện: chưa in hạn lên PDF) | Sếp |
 | O4 | Phiếu BOM về nhà máy đi đường nào (API/email), format gì, nhà máy nào nhận? | Bộ phận sản xuất |
 | O5 | Nền tảng chạy trên gì: Zalo Mini App, web, hay cả hai? Kênh gửi báo giá cho khách? | Chủ dự án / công ty |
-| — | File Excel BOM thật, chuẩn hoá thành workbook INPUT/OUTPUT (đầu vào để upload + nghiệm thu) [D14] | Công ty |
-| — | OUTPUT workbook trả gì: chỉ [mã vật tư + số lượng] (khuyến nghị) hay cả tiền | Xem file thật rồi chốt |
+| — | Bảng tính BOM chính thức (đầu vào để import công thức vào hệ thống) | Công ty |
 | — | Quy tắc làm tròn tiền (đề xuất: làm tròn về đồng ở từng dòng) | Kế toán |
 
 Thiết kế đã **chừa sẵn chỗ cho mọi điểm trên** — chốt xong chỉ nhập cấu hình, không phải sửa thiết kế.

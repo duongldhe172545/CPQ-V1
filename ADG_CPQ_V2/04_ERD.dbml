@@ -2,9 +2,6 @@
 //  ADG CPQ - Hệ thống báo giá tự động cho đại lý
 //  ERD (DBML) - import trực tiếp vào https://dbdiagram.io
 //
-//  PHIÊN BẢN 3 (03/07/2026) — giống hệt v2, CHỈ đổi cách tính BOM [D14]:
-//  không import logic Excel vào hệ thống nữa, BOM tính bằng chính file
-//  Excel của công ty qua hợp đồng INPUT/OUTPUT.
 //  PHIÊN BẢN 2 (02/07/2026) — cập nhật sau review & phỏng vấn nghiệp vụ.
 //  Bản gốc của BA: docs/_ban-goc-BA/ADG_CPQ_ERD.dbml
 //  Mọi thay đổi truy vết về mã D-x / F-x / O-x trong:
@@ -20,11 +17,10 @@
 //   - [D3] Bỏ band_percent; range giá bán chỉ còn min–max [OPEN O1: giá
 //     trị cụ thể chờ công ty ban hành].
 //   - [D9] Giữ đúng 2 vai admin | dealer. Khách cuối không truy cập.
-//   - [D14 - v3, thay D10] BOM tính bằng CHÍNH FILE EXCEL của công ty:
-//     hệ thống bơm thông số vào sheet INPUT, đọc kết quả từ sheet OUTPUT
-//     — không import logic. File upload lên hệ thống, có phiên bản +
-//     nghiệm thu bộ ca mẫu. Ngôn ngữ công thức trong hệ thống chỉ còn
-//     dùng cho auto-fill thông số linh kiện + điều kiện lọc SKU.
+//   - [D10] Toàn bộ logic BOM nằm trong hệ thống (không Excel-as-engine);
+//     ngôn ngữ công thức đặc tả ở Project Note (có bảng tra + biến trung
+//     gian). Công thức cụ thể do IT/Data Analyst (vai admin) đọc file
+//     Excel của công ty và NHẬP TAY vào hệ thống, nghiệm thu golden tests.
 //   - [F1..F4] Sửa các mâu thuẫn: ảnh cho phép trống khi nháp, snapshot
 //     khách hàng & sản phẩm, một BOM active mỗi sản phẩm.
 //   - Thêm config_audit_log (truy vết ai đổi giá/công thức lúc nào).
@@ -33,26 +29,27 @@
 Project ADG_CPQ {
   database_type: 'PostgreSQL'
   Note: '''
-  # Ngôn ngữ công thức [D14: CHỈ dùng cho auto-fill + lọc tương thích, KHÔNG dùng cho BOM]
-  - Biến: proj.<code> (thông số dự án của hạng mục), comp.<code> (thông số mặc định của SKU linh kiện đã chọn).
+  # Ngôn ngữ công thức [D10]
+  - Biến: proj.<code> (thông số dự án của hạng mục), comp.<code> (thông số mặc định của SKU linh kiện đã chọn),
+    calc.<code> (biến trung gian - xem dưới).
   - Toán tử: + - * / ( ) ; so sánh: = != < <= > >= ; logic: and or not.
-  - Hàm: if(điều_kiện, giá_trị_đúng, giá_trị_sai), round(x[, bậc]), ceil(x), floor(x), min(...), max(...).
+  - Hàm: if(điều_kiện, giá_trị_đúng, giá_trị_sai), round(x[, bậc]), ceil(x), floor(x), min(...), max(...),
+    lookup("mã_bảng_tra", trục_1 [, trục_2]) - tra giá trị theo khoảng (thay VLOOKUP/ma trận định mức của Excel).
   - Thông số kiểu select: so sánh theo value của option, vd: if(proj.mau_son = "tinh_dien", 1.2, 1.0).
+  - BIẾN TRUNG GIAN (product_calc_var): mỗi sản phẩm khai được các biến calc.<code> có công thức riêng,
+    tính theo thứ tự khai báo, dùng lại trong mọi công thức khác - thay kiểu "ô tham chiếu ô" của Excel
+    (vd: calc.so_nan = ceil(proj.height / 0.08); rồi số vít = calc.so_nan * 4).
+  - Ngữ nghĩa lỗi: chia 0, biến chưa có giá trị, tra ngoài khoảng bảng tra => công thức trả LỖI CÓ MÃ
+    (không trả 0 âm thầm); hệ thống dừng tính và báo admin.
   - Đầu ra component_param_formula.formula_expression = 1 giá trị thông số linh kiện.
+  - Đầu ra bom_template_line.quantity_formula = số lượng vật tư (biến proj.*/calc.* — linh/phụ kiện không tác động BOM).
   - Đầu ra component_sku_applicability.condition_expression = true/false (SKU có khả dụng không).
-
-  # Tính BOM qua workbook Excel [D14]
-  - Logic tính vật tư nằm NGUYÊN trong file Excel của công ty — hệ thống không import, không tái hiện.
-  - Mỗi sản phẩm một workbook chuẩn hoá (bảng product_bom_workbook): sheet INPUT có ô đặt tên
-    khớp code thông số dự án; sheet OUTPUT là bảng chuẩn [mã vật tư, số lượng].
-  - Hệ thống ghi giá trị thông số vào INPUT -> tính -> đọc OUTPUT.
-  - Chỉ phiên bản workbook vượt NGHIỆM THU BỘ CA MẪU (so kết quả với đáp án người làm giá,
-    khớp 100%) mới được dùng tính giá thật; sửa logic = sửa file -> upload phiên bản mới -> nghiệm thu lại.
-  - [OPEN] OUTPUT khuyến nghị chỉ gồm mã + số lượng (đơn giá lấy từ bảng material trong hệ
-    thống để giữ audit + bảo mật giá); có trả cả tiền hay không — chốt khi xem file thật.
+  - [OPEN — chờ công ty] Công thức cụ thể chưa chốt; khi có bảng tính chính thức, IT/Data Analyst
+    (vai admin) đọc file Excel và nhập công thức + bảng tra vào hệ thống, nghiệm thu bằng golden tests
+    (chạy song song Excel ↔ hệ thống trên bộ thông số thật, khớp 100% mới go-live).
 
   # Công thức giá (ẩn với đại lý các phần *hidden*) — tính THEO TỪNG HẠNG MỤC [D1]
-  item.cost_material = Σ(qty_từ_OUTPUT_workbook × material.unit_price)  -- *hidden* [D14]
+  item.cost_material = Σ(bom_line.qty × material.unit_price)      -- *hidden*
                      + Σ(item_component.unit_price × quantity)     -- linh kiện cộng thẳng
                      + Σ(item_accessory.unit_price)                -- phụ kiện (SL luôn = 1)
   item.applied_gross% = global_gross% (theo sản phẩm)
@@ -396,11 +393,11 @@ Table product_accessory {
 }
 
 // ---------------------------------------------------------------------
-//  6. VẬT TƯ & WORKBOOK BOM [D14: BOM tính bằng file Excel, không import logic]
+//  6. VẬT TƯ & BOM TEMPLATE [D10: logic BOM nằm trong hệ thống]
 // ---------------------------------------------------------------------
 Table material {
   id         bigint         [pk, increment]
-  code       varchar        [unique, not null, note: 'PHẢI khớp mã vật tư trong sheet OUTPUT của workbook [D14]']
+  code       varchar        [unique, not null, note: 'dùng tham chiếu trong quản trị & import từ Excel']
   name       varchar        [not null]
   unit_id    bigint         [ref: > unit_of_measure.id]
   unit_price decimal(18,2)  [not null, note: 'ĐƠN GIÁ hiện hành (1 giá, không lịch sử - MVP) - ẩn với đại lý; thay đổi ghi audit log']
@@ -408,23 +405,75 @@ Table material {
   Note: 'Vật tư master do admin quản lý. Chỉ lưu 1 giá hiện hành.'
 }
 
-Table product_bom_workbook {
-  id             bigint    [pk, increment]
-  product_id     bigint    [not null, ref: > product.id]
-  version        int       [not null, note: 'tăng dần theo sản phẩm']
-  file_url       varchar   [not null, note: 'file .xlsx của công ty, lưu trong hệ thống']
-  checksum       varchar   [not null, note: 'phát hiện file bị đổi ngoài luồng']
-  input_mapping  text      [note: 'ánh xạ: code thông số dự án -> tên ô trong sheet INPUT']
-  output_range   varchar   [note: 'vùng bảng OUTPUT chuẩn [mã vật tư, số lượng]']
-  is_active      boolean   [not null, default: false, note: 'chỉ được active sau khi vượt nghiệm thu bộ ca mẫu']
-  validated_at   timestamp [note: 'thời điểm vượt nghiệm thu']
-  uploaded_by    bigint    [ref: > user_account.id]
-  created_at     timestamp
+Table bom_template {
+  id         bigint   [pk, increment]
+  product_id bigint   [not null, ref: > product.id]
+  name       varchar  [not null]
+  is_active  boolean  [not null, default: true]
+  created_at timestamp
 
   indexes {
-    (product_id, version) [unique, name: 'uq_bom_workbook_version']
+    (product_id) [name: 'idx_bom_product']
   }
-  Note: '[D14 - MỚI, thay bom_template/bom_template_line của v2] Workbook BOM theo sản phẩm: hệ thống ghi thông số vào sheet INPUT, đọc kết quả từ sheet OUTPUT — logic tính nằm NGUYÊN TRONG FILE EXCEL, hệ thống không tái hiện. [F4] Tối đa MỘT version active mỗi sản phẩm; upload version mới phải qua nghiệm thu bộ ca mẫu + ghi audit. Macro/VBA không hỗ trợ.'
+  Note: '[F4] RÀNG BUỘC: tối đa MỘT template active cho mỗi sản phẩm tại một thời điểm (partial unique index product_id WHERE is_active, hoặc validate tầng app). Template không active = bản nháp/lưu trữ.'
+}
+
+Table bom_template_line {
+  id               bigint  [pk, increment]
+  bom_template_id  bigint  [not null, ref: > bom_template.id]
+  material_id      bigint  [not null, ref: > material.id]
+  quantity_formula text    [not null, note: 'công thức số lượng theo thông số dự án, hỗ trợ rẽ nhánh [D10], vd: if(proj.height > 3, proj.length * 1.15, proj.length * 1.05)']
+  note             varchar
+  sort_order       int     [default: 0]
+  Note: 'Dòng vật tư trong BOM mẫu; số lượng tính bằng công thức từ thông số dự án (linh/phụ kiện KHÔNG tác động BOM). [OPEN — chờ công ty] Nội dung cụ thể do IT/Data Analyst đọc bảng tính chính thức và nhập tay, nghiệm thu golden tests.'
+}
+
+// ----- Bảng tra & biến trung gian & golden tests (bổ sung 03/07 - phục vụ "mọi công thức") -----
+
+Table lookup_table {
+  id          bigint   [pk, increment]
+  code        varchar  [unique, not null, note: 'dùng trong công thức: lookup("<code>", ...)']
+  name        varchar  [not null, note: 'vd: Định mức ray theo rộng x cao']
+  axis1_name  varchar  [not null, note: 'tên trục 1, vd: chiều rộng (m)']
+  axis2_name  varchar  [note: 'tên trục 2 (NULL nếu bảng tra 1 chiều)']
+  is_active   boolean  [not null, default: true]
+  Note: 'Bảng tra theo khoảng - thay VLOOKUP/ma trận định mức của Excel. Admin (IT/DA) quản lý trong UC-A6.'
+}
+
+Table lookup_entry {
+  id              bigint         [pk, increment]
+  lookup_table_id bigint         [not null, ref: > lookup_table.id]
+  axis1_from      decimal(18,4)  [not null]
+  axis1_to        decimal(18,4)  [not null, note: 'khoảng [from, to); các khoảng không được chồng lấn']
+  axis2_from      decimal(18,4)  [note: 'NULL nếu bảng 1 chiều']
+  axis2_to        decimal(18,4)
+  value           decimal(18,4)  [not null, note: 'giá trị tra ra']
+  Note: 'Một ô của bảng tra. Tra ngoài mọi khoảng => công thức trả lỗi có mã (không trả 0 âm thầm).'
+}
+
+Table product_calc_var {
+  id                 bigint   [pk, increment]
+  product_id         bigint   [not null, ref: > product.id]
+  code               varchar  [not null, note: 'dùng trong công thức: calc.<code>']
+  name               varchar  [not null, note: 'vd: Số nan cửa']
+  formula_expression text     [not null, note: 'tính từ proj.*/comp.*/calc.* khai TRƯỚC nó']
+  sort_order         int      [not null, default: 0, note: 'thứ tự tính - biến sau dùng được biến trước']
+
+  indexes {
+    (product_id, code) [unique, name: 'uq_calcvar_product_code']
+  }
+  Note: 'Biến trung gian theo sản phẩm - thay kiểu "ô tham chiếu ô" của Excel, tránh chép lặp công thức. IT/DA khai trong UC-A6.'
+}
+
+Table golden_test_case {
+  id             bigint    [pk, increment]
+  product_id     bigint    [not null, ref: > product.id]
+  name           varchar   [not null, note: 'vd: Cửa 4m x 3m, màu tĩnh điện (ca biên)']
+  input_values   text      [not null, note: 'JSON: bộ giá trị thông số dự án (+ linh kiện nếu cần)']
+  expected_lines text      [not null, note: 'JSON: kết quả kỳ vọng [mã vật tư, số lượng] lấy từ Excel gốc']
+  last_run_at    timestamp
+  last_result    varchar   [note: 'passed | failed | chưa chạy']
+  Note: 'Bộ ca đối chiếu (golden tests) theo sản phẩm: nhập tay công thức xong phải chạy khớp 100% với Excel gốc mới go-live; TỰ CHẠY LẠI mỗi khi công thức/bảng tra/BOM của sản phẩm bị sửa (chặn nếu lệch) - xem UC-A8.'
 }
 
 // ---------------------------------------------------------------------
@@ -567,7 +616,7 @@ Table quote_item_bom_line {
   quantity      decimal(18,4)  [not null, note: 'kết quả công thức từ thông số dự án (cho 1 đơn vị hạng mục)']
   unit_price    decimal(18,2)  [note: 'snapshot đơn giá vật tư - ẩn']
   line_cost     decimal(18,2)  [note: 'quantity × unit_price - ẩn']
-  Note: '[D14] Snapshot kết quả OUTPUT của workbook (kèm đơn giá vật tư) tại thời điểm tính, lưu ẩn theo hạng mục. Đại lý KHÔNG xem chi tiết. Đây cũng là nguồn phiếu BOM sản xuất gửi nhà máy.'
+  Note: 'BOM tính ra & lưu ẩn theo hạng mục. Đại lý KHÔNG xem chi tiết. Đây cũng là nguồn phiếu BOM sản xuất gửi nhà máy.'
 }
 
 Table quote_item_ai_image {
@@ -644,9 +693,14 @@ TableGroup "5. Phụ kiện" {
   accessory
   product_accessory
 }
-TableGroup "6. Vật tư & workbook BOM" {
+TableGroup "6. Vật tư & BOM" {
   material
-  product_bom_workbook
+  bom_template
+  bom_template_line
+  lookup_table
+  lookup_entry
+  product_calc_var
+  golden_test_case
 }
 TableGroup "7. Cấu hình giá" {
   product_pricing_config
