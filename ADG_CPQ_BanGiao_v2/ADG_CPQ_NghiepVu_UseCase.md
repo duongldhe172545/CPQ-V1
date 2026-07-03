@@ -6,9 +6,9 @@
 
 Tài liệu này đi kèm ba file thiết kế:
 
-- `ADG_CPQ_ERD.dbml` (v2) — sơ đồ dữ liệu (import vào dbdiagram.io).
-- `ADG_CPQ_Swimlane_v2.drawio` — luồng nghiệp vụ 4 bước (mở bằng draw.io / diagrams.net; bản PNG cũ lưu ở `docs/_ban-goc-BA/`).
-- `ADG_CPQ_UseCase_ChiTiet.md` (v2) — đặc tả use case chi tiết (8 UC cấu hình + 12 UC pipeline + 7 UC phụ trợ).
+- `ADG_CPQ_ERD.dbml` (v3) — sơ đồ dữ liệu (import vào dbdiagram.io).
+- `ADG_CPQ_Swimlane_v3.drawio` — luồng nghiệp vụ 4 bước (mở bằng draw.io / diagrams.net).
+- `ADG_CPQ_UseCase_ChiTiet.md` (v3) — đặc tả use case chi tiết (8 UC cấu hình + 12 UC pipeline + 7 UC phụ trợ).
 
 ---
 

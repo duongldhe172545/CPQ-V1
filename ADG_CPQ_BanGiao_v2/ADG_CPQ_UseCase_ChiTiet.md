@@ -8,9 +8,9 @@
 
 Đọc kèm:
 
-- `ADG_CPQ_ERD.dbml` (v2) — mô hình dữ liệu.
-- `ADG_CPQ_Swimlane_v2.drawio` — luồng nghiệp vụ 4 bước (mở bằng draw.io / diagrams.net).
-- `ADG_CPQ_NghiepVu_UseCase.md` (v2) — diễn giải triết lý thiết kế.
+- `ADG_CPQ_ERD.dbml` (v3) — mô hình dữ liệu.
+- `ADG_CPQ_Swimlane_v3.drawio` — luồng nghiệp vụ 4 bước (mở bằng draw.io / diagrams.net).
+- `ADG_CPQ_NghiepVu_UseCase.md` (v3) — diễn giải triết lý thiết kế.
 
 ## Quy ước
 
