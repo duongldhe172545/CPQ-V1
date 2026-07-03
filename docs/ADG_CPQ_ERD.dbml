@@ -126,6 +126,12 @@ Enum delivery_status {
   failed
 }
 
+Enum ai_image_status {
+  pending           // đã enqueue, đang sinh (giữ chỗ lượt gen)
+  succeeded         // có ảnh - tính lượt
+  failed_technical  // lỗi dịch vụ AI - KHÔNG tính lượt [D6][AD-14]
+}
+
 // ---------------------------------------------------------------------
 //  0. CẤU HÌNH & THAM CHIẾU HỆ THỐNG
 // ---------------------------------------------------------------------
@@ -495,7 +501,7 @@ Table quote_item {
   selling_price         decimal(18,2) [note: 'giá bán 1 đơn vị đại lý chọn trong [min,max]']
   line_total            decimal(18,2) [note: 'selling_price × quantity']
 
-  ai_generation_count int     [not null, default: 0, note: '[D6] số lần đã tạo ảnh AI cho hạng mục này (tối đa ai_max_regenerate); reset khi thay ảnh hiện trường']
+  field_photo_updated_at timestamp [note: '[AD-14] mốc thay ảnh gần nhất - dùng đếm lượt gen sau mốc này']
   no_mockup_reason    varchar [note: '[D6] lý do bắt buộc khi phát hành hạng mục không kèm mock-up; có log để công ty giám sát']
 
   indexes {
@@ -565,15 +571,16 @@ Table quote_item_bom_line {
 Table quote_item_ai_image {
   id            bigint    [pk, increment]
   quote_item_id bigint    [not null, ref: > quote_item.id]
-  generation_no int       [not null, note: '1..ai_max_regenerate, đếm theo HẠNG MỤC; lần gen lỗi kỹ thuật (không ra ảnh) không tính lượt [D6]']
-  image_url     varchar   [not null]
+  generation_no int       [not null, note: '[AD-14] tăng ĐƠN ĐIỆU theo hạng mục, không bao giờ reset/tái sử dụng (thay ảnh không xoá dòng cũ)']
+  status        ai_image_status [not null, default: 'pending', note: '[AD-14] enqueue tạo dòng pending (giữ chỗ, chống race); job cập nhật succeeded | failed_technical']
+  image_url     varchar   [note: 'NULL khi pending/failed']
   is_selected   boolean   [not null, default: false, note: 'tối đa 1 ảnh được chọn mỗi hạng mục (ràng buộc tầng app) - đính vào PDF']
   created_at    timestamp
 
   indexes {
     (quote_item_id, generation_no) [unique, name: 'uq_item_ai_gen']
   }
-  Note: '[D6] Ảnh mock-up AI ghép từ ảnh hiện trường CỦA HẠNG MỤC + thumbnail sản phẩm. Thay ảnh hiện trường → reset lượt gen.'
+  Note: '[D6][AD-14] Ảnh mock-up AI theo hạng mục. KHÔNG có cột đếm tay: số lượt đã dùng = số dòng status != failed_technical tạo sau field_photo_updated_at của hạng mục (lỗi kỹ thuật không tính lượt).'
 }
 
 // ---------------------------------------------------------------------
