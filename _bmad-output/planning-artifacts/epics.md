@@ -36,13 +36,13 @@ This document provides the complete epic and story breakdown for ADG CPQ, decomp
 **F3 — Vật tư & BOM**
 
 - FR-020: Danh mục vật tư, một đơn giá hiện hành, ẩn với đại lý
-- FR-021: BOM template theo sản phẩm, đúng một bản active [F4]; công thức số lượng theo thông số
-- FR-022: Ngôn ngữ công thức: số học, so sánh, logic, if, round/ceil/floor/min/max, proj.*/comp.* [D10]
-- FR-023: Công thức lỗi → dừng tính, báo đại lý + cảnh báo admin, không ra giá sai âm thầm
+- FR-021: Workbook BOM Excel theo sản phẩm [D14]: upload có phiên bản + checksum, kiểm tra hợp đồng INPUT/OUTPUT, một version active [F4]; logic nằm nguyên trong file
+- FR-022: Ngôn ngữ công thức (số học, so sánh, logic, if, round/ceil/floor/min/max, proj.*/comp.*) — CHỈ cho auto-fill + tương thích SKU; BOM đi qua workbook [D14]
+- FR-023: Lỗi khi tính (workbook lỗi, mã vật tư lạ, thiếu giá, công thức auto-fill lỗi) → dừng, báo đại lý + cảnh báo admin, không ra giá sai âm thầm
 
 **F4 — Định giá**
 
-- FR-030: Tính giá theo hạng mục: cost_material → import_price = cost × (1 + gross%)
+- FR-030: Tính giá theo hạng mục: cost_material = (OUTPUT workbook × đơn giá hệ thống [OPEN O9]) + linh kiện + phụ kiện → import_price = cost × (1 + gross%); ghi lại version workbook đã dùng
 - FR-031: Gross 2 tầng; mức đại lý-theo-sản-phẩm thay thế mức chung
 - FR-032: Range min–max theo sản phẩm [D3][O1]; validate min ≤ max
 - FR-033: Sàn giá bán ≥ giá nhập mặc định; cờ allow_below_import [O2]
@@ -85,10 +85,10 @@ This document provides the complete epic and story breakdown for ADG CPQ, decomp
 - FR-073: Audit log mọi thay đổi cấu hình giá/công thức; chỉ đọc
 - FR-074: Số liệu vận hành tối thiểu cho G1–G4
 
-**F9 — Import & golden tests (trong MVP)**
+**F9 — Nghiệm thu workbook BOM (trong MVP)**
 
-- FR-090: Import công thức từ bảng tính (AI hỗ trợ); golden tests khớp 100% mới go-live; sau go-live hệ thống là nguồn chân lý duy nhất [D10]
-- FR-091: Golden tests lưu lại, chạy hồi quy khi sửa công thức
+- FR-090: Nghiệm thu workbook bằng bộ ca mẫu [D14]: input + kết quả kỳ vọng của người làm giá, khớp 100% mới active/go-live; file Excel là nguồn chân lý logic BOM, hệ thống giữ phiên bản + checksum + audit
+- FR-091: Bộ ca mẫu lưu theo sản phẩm, tự chạy lại khi upload version mới — chặn active nếu lệch
 
 ### NonFunctional Requirements
 
@@ -110,7 +110,8 @@ Từ Architecture Spine (16 AD — ràng buộc mọi story, xem ARCHITECTURE-SP
 - **Không có starter template bên ngoài** — Epic đầu tiên phải scaffold monorepo pnpm theo Structural Seed: `apps/api` (NestJS 11), `apps/web` (Next.js 16), `packages/shared` (zod), `packages/formula-engine`, docker-compose (PostgreSQL 18, Valkey 8, object storage), pin Node 24 LTS + pnpm 11
 - AD-1: modular monolith, mỗi bảng một module chủ (nhóm quote_* thuộc module quote)
 - AD-2/AD-3: tính giá chỉ ở server; DTO whitelist theo vai + e2e test bảo mật
-- AD-4: formula-engine là package riêng, parser AST, không eval
+- AD-4: formula-engine là package riêng, parser AST, không eval — phạm vi CHỈ auto-fill + tương thích (thu hẹp theo D14)
+- AD-17/D14: BOM tính bằng workbook Excel qua adapter `BomWorkbookEngine` duy nhất (INPUT named ranges → OUTPUT bảng chuẩn); engine cụ thể chọn bằng story spike; macro không hỗ trợ
 - AD-5: INPUT vs DERIVED; publish = 1 transaction; closed-list field sau submitted
 - AD-6: tiền integer VND, BIGINT physical, roundVnd() duy nhất
 - AD-7: việc chậm qua BullMQ, job idempotent, polling status
@@ -148,7 +149,7 @@ Chưa có tài liệu UX riêng (bmad-ux chưa chạy). Yêu cầu UX rút từ 
 | FR-040..FR-048 | Epic 5 | Pipeline báo giá đại lý |
 | FR-060..FR-065 | Epic 6 | Phát hành, PDF, gửi khách/nhà máy |
 | FR-050, FR-051, FR-052 | Epic 7 | Mock-up AI |
-| FR-090, FR-091, FR-074 | Epic 8 | Import, golden tests, seed, số liệu vận hành |
+| FR-090, FR-091, FR-074 | Epic 8 | Nghiệm thu workbook, seed, số liệu vận hành |
 
 Mọi FR của PRD đều có epic; không FR nào bị bỏ rơi.
 
@@ -162,8 +163,8 @@ Admin đăng nhập được vào hệ thống chạy bằng Docker, tạo đạ
 Admin tự dựng cây danh mục, sản phẩm, bộ thông số dự án (kèm dropdown option) và phụ kiện — thêm sản phẩm mới hoàn toàn bằng dữ liệu, không cần dev.
 **FRs covered:** FR-001, FR-002, FR-003, FR-004
 
-### Epic 3: Linh kiện, vật tư & công thức BOM
-Admin khai loại/SKU linh kiện, công thức auto-fill, điều kiện tương thích, vật tư và BOM template bằng ngôn ngữ công thức có rẽ nhánh; có công cụ kiểm thử tại chỗ. Nền tảng là package `formula-engine` (parser AST — AD-4).
+### Epic 3: Linh kiện, vật tư & workbook BOM
+Admin khai loại/SKU linh kiện, công thức auto-fill, điều kiện tương thích, vật tư, và **upload workbook BOM Excel** (Excel-as-engine [D14]) có phiên bản + chạy thử tại chỗ. Hai nền tảng: package `formula-engine` (auto-fill/tương thích — AD-4) và adapter `BomWorkbookEngine` (AD-17, chọn engine bằng spike).
 **FRs covered:** FR-010, FR-011, FR-012, FR-013, FR-020, FR-021, FR-022, FR-023
 
 ### Epic 4: Bộ máy định giá & che dữ liệu mật
@@ -182,8 +183,8 @@ Admin đặt gross (2 tầng) và range min–max; hệ thống tính cost → g
 Đại lý sinh ảnh "nhà khách sau khi lắp cửa" cho từng hạng mục qua hàng đợi (adapter provider — AD-13/14), duyệt ảnh đính vào PDF; quy tắc 3 tầng không gây tắc phát hành.
 **FRs covered:** FR-050, FR-051, FR-052
 
-### Epic 8: Sẵn sàng vận hành: import công thức, golden tests & seed
-Admin import công thức từ bảng tính công ty và nghiệm thu bằng golden tests (khớp 100% mới go-live, giữ lại chạy hồi quy); import seed dữ liệu ban đầu (vật tư, SKU, đại lý); hệ thống đếm được các chỉ số G1–G4.
+### Epic 8: Sẵn sàng vận hành: nghiệm thu workbook, seed & số liệu
+Admin nghiệm thu workbook BOM thật bằng bộ ca mẫu (khớp 100% mới go-live, tự chạy hồi quy khi upload version mới); import seed dữ liệu ban đầu (vật tư, SKU, đại lý); hệ thống đếm được các chỉ số G1–G4.
 **FRs covered:** FR-090, FR-091, FR-074
 
 **Chuỗi phụ thuộc:** 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 (mỗi epic đứng được một mình trên nền các epic trước; Epic 7 sau Epic 6 vì phát hành có đường không-ảnh theo D6).
@@ -333,15 +334,15 @@ So that đại lý tick chọn được phụ kiện ở báo giá.
 **Then** thay đổi đơn giá ghi audit (đăng ký interceptor 1.6); gán trùng bị bỏ qua êm
 **And** gỡ gán không ảnh hưởng dữ liệu báo giá cũ (khi có).
 
-## Epic 3: Linh kiện, vật tư & công thức BOM
+## Epic 3: Linh kiện, vật tư & workbook BOM
 
-Admin cấu hình đủ đầu vào để tính vật tư: formula engine (AD-4), linh kiện + tương thích [D2], vật tư + BOM template.
+Admin cấu hình đủ đầu vào để tính vật tư: formula engine cho auto-fill/tương thích (AD-4), linh kiện + tương thích [D2], vật tư + workbook BOM Excel-as-engine (AD-17, [D14]).
 
 ### Story 3.1: Formula engine — parser công thức
 
 As a admin (người hưởng),
 I want một engine công thức duy nhất diễn giải đúng đặc tả (số học, so sánh, logic, if, round/ceil/floor/min/max, biến proj.*/comp.*),
-So that auto-fill, tương thích, BOM và golden tests cùng một semantics.
+So that auto-fill thông số linh kiện và điều kiện tương thích SKU cùng một semantics (BOM không dùng engine này — đi qua workbook [D14]).
 
 **Acceptance Criteria:**
 
@@ -427,18 +428,31 @@ So that BOM có nguồn giá để tính giá vốn.
 **Then** đổi đơn giá ghi audit; vô hiệu hoá thay xoá cứng
 **And** mọi field giá vật tư nằm ngoài DTO vai dealer.
 
-### Story 3.8: BOM template & công thức số lượng
+### Story 3.8: Spike + adapter engine tính workbook Excel
 
-As a admin,
-I want dựng BOM template theo sản phẩm với công thức số lượng và kiểm thử tại chỗ,
-So that Phase giá tính được cost_material đúng.
+As a hệ thống,
+I want một adapter `BomWorkbookEngine` duy nhất tính được file Excel server-side (đã chọn engine qua spike),
+So that BOM tính bằng chính file của công ty, không tái hiện logic (AD-17, [D14]).
 
 **Acceptance Criteria:**
 
-**Given** vật tư (3.7) + thông số sản phẩm (2.3) + engine (3.1)
-**When** tạo template, thêm dòng (vật tư + `quantity_formula` chỉ dùng `proj.*`), bấm kiểm thử với bộ thông số mẫu
-**Then** hiển thị lượng từng dòng + tổng tiền NVL; công thức tham chiếu thông số không thuộc sản phẩm bị chặn lưu; vật tư thiếu giá → không cho active
-**And** đặt active tự bỏ active template cũ của sản phẩm — không bao giờ có 2 template active (F4).
+**Given** ba ứng viên engine (LibreOffice headless, HyperFormula, sidecar Python `formulas`) và một workbook mẫu chuẩn hoá (INPUT named ranges, OUTPUT bảng chuẩn) có công thức đại diện (IF, VLOOKUP, ROUND, bảng tra)
+**When** chạy spike so sánh: độ phủ hàm, thời gian tính, độ phức tạp vận hành
+**Then** một engine được chọn kèm biên bản so sánh ghi vào addendum; adapter `BomWorkbookEngine(workbookFile, inputs) → [{material_code, quantity}] | typedError` hoạt động với workbook mẫu
+**And** engine chạy được trong worker; macro/VBA bị từ chối rõ ràng với mã lỗi `WORKBOOK_UNSUPPORTED`; kết quả tính ≤ 3s cho workbook mẫu (NFR-06).
+
+### Story 3.9: Quản lý workbook BOM — upload, hợp đồng & phiên bản
+
+As a admin,
+I want upload workbook BOM cho sản phẩm, hệ thống kiểm tra hợp đồng và quản lý phiên bản,
+So that logic BOM của công ty vào hệ thống có kiểm soát (FR-021).
+
+**Acceptance Criteria:**
+
+**Given** sản phẩm + thông số (2.3) + vật tư (3.7) + adapter engine (3.8)
+**When** upload file `.xlsx`
+**Then** hệ thống tạo `product_bom_workbook` version mới (checksum, người upload, audit) và **kiểm tra hợp đồng**: INPUT có đủ named range khớp `code` thông số của sản phẩm; OUTPUT đúng bảng chuẩn; mọi `material_code` tồn tại trong danh mục vật tư — lỗi nào chỉ đích danh lỗi đó
+**And** màn "chạy thử": nhập bộ thông số mẫu → hiển thị OUTPUT (vật tư + số lượng) + giá vốn NVL ước tính; version chỉ active được sau nghiệm thu (8.1), active mới tự bỏ active cũ (F4).
 
 ## Epic 4: Bộ máy định giá & che dữ liệu mật
 
@@ -465,9 +479,9 @@ So that mọi nơi cần giá đều gọi đúng một đường (AD-5).
 
 **Acceptance Criteria:**
 
-**Given** cấu hình đầy đủ (BOM active, linh kiện + số lượng, phụ kiện, gross, thông số)
+**Given** cấu hình đầy đủ (workbook BOM version active [D14], linh kiện + số lượng, phụ kiện, gross, thông số)
 **When** gọi `priceItem(config)` trong module `pricing`
-**Then** trả breakdown: BOM lines (lượng × giá), tiền linh kiện, tiền phụ kiện, `cost_material`, `applied_gross_percent`, `import_price` — mọi số tiền qua `roundVnd()` từng dòng, kèm `priced_at`
+**Then** trả breakdown: BOM lines (số lượng từ OUTPUT workbook qua adapter 3.8 × đơn giá `material` [OPEN O9]), tiền linh kiện, tiền phụ kiện, `cost_material`, `applied_gross_percent`, `import_price` — mọi số tiền qua `roundVnd()` từng dòng, kèm `priced_at` + `bom_workbook_version` đã dùng
 **And** công thức lỗi/vật tư thiếu giá → typedError có mã (`FORMULA_ERROR`, `MATERIAL_PRICE_MISSING`), không trả giá sai âm thầm (FR-023); admin có màn "chạy thử giá" dùng chính hàm này; unit test đối chiếu một ca tính tay đầy đủ.
 
 ### Story 4.3: Chặn dữ liệu mật tầng API — có bằng chứng
@@ -701,22 +715,22 @@ So that vừa giữ chất lượng vừa không tắc [D6].
 **Then** chặn với 2 lối thoát rõ trên UI: (a) thay ảnh hiện trường → lượt gen tính lại từ mốc mới; (b) "phát hành không kèm ảnh" đòi `no_mockup_reason` bắt buộc, lưu + log
 **And** báo cáo đếm được tỷ lệ phát hành không kèm mock-up (nguồn cho counter-metric G1); `mockup_required` tắt thì bỏ qua toàn bộ kiểm tra.
 
-## Epic 8: Sẵn sàng vận hành — import, golden tests & số liệu
+## Epic 8: Sẵn sàng vận hành — nghiệm thu workbook, seed & số liệu
 
-Đưa dữ liệu và công thức thật vào hệ thống một cách có nghiệm thu; đo được G1–G4.
+Đưa dữ liệu và workbook thật vào hệ thống một cách có nghiệm thu; đo được G1–G4.
 
-### Story 8.1: Golden-test harness
+### Story 8.1: Bộ ca nghiệm thu workbook
 
 As a admin,
-I want định nghĩa bộ ca đối chiếu cho từng sản phẩm và chạy nghiệm thu tự động,
-So that công thức import vào khớp 100% với bảng tính gốc mới go-live [D10].
+I want định nghĩa bộ ca mẫu cho từng sản phẩm và chạy nghiệm thu workbook tự động,
+So that chỉ workbook cho kết quả đúng mới được dùng tính giá thật [D14].
 
 **Acceptance Criteria:**
 
-**Given** sản phẩm đã cấu hình công thức
-**When** nạp bộ golden tests (input: bộ thông số + linh kiện; expected: BOM lines + cost) và bấm chạy
-**Then** hệ thống so từng dòng vật tư (lượng, tiền) qua đúng hàm 4.2; báo cáo liệt kê ca lệch (input, expected, actual); khớp 100% mới cho gắn nhãn "đã nghiệm thu"
-**And** bộ test lưu theo sản phẩm, chạy lại tự động khi công thức/BOM của sản phẩm bị sửa (FR-091), kết quả ghi log.
+**Given** workbook version đã qua kiểm tra hợp đồng (3.9)
+**When** nạp bộ ca mẫu (input: bộ thông số; expected: [mã vật tư + số lượng] do người làm giá xác nhận) và bấm "Nghiệm thu"
+**Then** hệ thống chạy từng ca qua adapter engine, so OUTPUT với kỳ vọng từng dòng; báo cáo liệt kê ca lệch (input, expected, actual); khớp 100% mới gắn `validated_at` và cho phép active
+**And** bộ ca lưu theo sản phẩm, **tự chạy lại khi upload version workbook mới** — lệch thì chặn active (FR-091), kết quả ghi log.
 
 ### Story 8.2: Import seed dữ liệu ban đầu
 
@@ -731,18 +745,18 @@ So that không phải nhập tay hàng trăm bản ghi trước pilot.
 **Then** preview + validate từng dòng (lỗi chỉ rõ dòng/cột), import theo giao dịch — lỗi thì không ghi nửa vời; bản ghi tạo qua đúng service nghiệp vụ nên audit log đầy đủ
 **And** import lại file đã sửa cập nhật theo `code` (idempotent theo mã).
 
-### Story 8.3: Import công thức từ bảng tính
+### Story 8.3: Chuẩn hoá & đưa workbook thật vào go-live
 
 As a admin,
-I want quy trình đưa công thức từ bảng tính công ty vào cấu hình có đối chiếu,
-So that logic Excel thành nguồn chân lý trong hệ thống [D10].
+I want đưa file Excel BOM thật của công ty vào hệ thống theo chuẩn workbook và nghiệm thu go-live,
+So that sản phẩm đầu tiên tính giá bằng chính logic thật [D14].
 
 **Acceptance Criteria:**
 
-**Given** bảng tính chính thức được công ty chốt [OPEN — chờ công ty]
-**When** thực hiện import (nhập tay có hỗ trợ hoặc file mapping)
-**Then** mọi công thức đi qua validate 3.4/3.8; sản phẩm chỉ go-live (active cho đại lý) sau khi golden tests 8.1 khớp 100%
-**And** tài liệu hoá quy trình "khoá Excel": sau go-live, sửa công thức chỉ trên hệ thống (audit); story này giao khung công cụ + quy trình, nội dung thật chạy khi có bảng tính.
+**Given** file Excel BOM thật được công ty cung cấp [OPEN — chờ công ty; kèm quyết định O9 về nội dung OUTPUT]
+**When** chuẩn hoá file theo mẫu (thêm sheet INPUT named ranges + sheet OUTPUT bảng chuẩn — không sửa logic tính), upload qua 3.9 và nghiệm thu qua 8.1
+**Then** sản phẩm go-live với workbook đã nghiệm thu; hướng dẫn chuẩn hoá workbook được tài liệu hoá để nhân bản cho các sản phẩm sau
+**And** quy trình vận hành ghi rõ: sửa logic = sửa file → upload version mới → nghiệm thu lại — không có đường tắt; story này giao khung + quy trình, chạy thật khi có file.
 
 ### Story 8.4: Số liệu vận hành G1–G4
 

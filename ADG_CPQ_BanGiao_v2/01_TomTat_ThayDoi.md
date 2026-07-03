@@ -13,10 +13,12 @@
 - **v2:** admin cấu hình điều kiện tương thích (VD: bộ tời X chỉ dùng cho diện tích ≤ 25m²); hệ thống **chỉ hiển thị các SKU hợp lệ** theo thông số đã nhập, đại lý chọn trong số đó.
 - **Lý do:** chọn sai linh kiện → BOM sai gửi thẳng về nhà máy. Rủi ro này không thể để sau MVP.
 
-### ③ Toàn bộ logic tính BOM nằm TRONG hệ thống [D10]
+### ③ BOM tính bằng CHÍNH FILE EXCEL của công ty [D14 — cập nhật 03/07, đảo phương án cũ]
 - Câu hỏi lớn: logic tính vật tư đang nằm trong file Excel phức tạp của công ty — đẩy vào hệ thống hay để hệ thống gọi Excel?
-- **Chốt:** đẩy toàn bộ vào hệ thống. Khi công ty chốt bảng tính chính thức, logic sẽ được **import (có AI hỗ trợ) và nghiệm thu bằng "golden tests"** — chạy song song Excel với hệ thống trên hàng loạt bộ thông số thật, khớp 100% mới đưa vào sử dụng. Sau đó **hệ thống là nguồn chân lý duy nhất**, sửa công thức = sửa trên hệ thống (có ghi vết).
-- Ngôn ngữ công thức được đặc tả mới, hỗ trợ **rẽ nhánh điều kiện** (VD: "cao trên 3m thì dùng định mức khác") — bản v1 hoàn toàn không đặc tả điều này.
+- **Chốt (mới):** KHÔNG import logic vào hệ thống. Hệ thống chỉ làm việc qua **hợp đồng INPUT/OUTPUT**: bơm thông số (cao, rộng...) vào sheet INPUT của file, đọc kết quả (mã vật tư + số lượng) từ sheet OUTPUT. Logic tính **nằm nguyên trong file Excel** — đội làm giá tiếp tục làm việc trên file quen thuộc.
+- Đổi lại, file được kiểm soát chặt: **upload lên hệ thống có phiên bản + checksum**, và chỉ phiên bản vượt **nghiệm thu bộ ca mẫu** (so kết quả với đáp án người làm giá xác nhận, khớp 100%) mới được dùng tính giá thật. Sửa logic = sửa file → upload phiên bản mới → nghiệm thu lại.
+- Ngôn ngữ công thức trong hệ thống vẫn tồn tại nhưng **chỉ dùng cho** auto-fill thông số linh kiện và điều kiện lọc SKU tương thích (mục ②).
+- Còn chờ xem file thật (O9): OUTPUT chỉ trả số lượng (đơn giá vẫn quản lý trong hệ thống — khuyến nghị) hay trả cả tiền.
 
 ### ④ Giá cả có kỷ luật vòng đời rõ ràng [D3][D4][D5]
 - Khoảng giá bán cho đại lý chỉ còn **một cơ chế min–max** do công ty quy định (bỏ cơ chế ±% chồng chéo của v1).
@@ -38,25 +40,3 @@
 | Không có ghi vết ai đổi giá/công thức lúc nào | Thêm nhật ký thay đổi cấu hình (`config_audit_log`) — trả lời được khiếu nại giá |
 
 Ngoài ra v2 bổ sung: quy tắc làm tròn tiền VND, hạn hiệu lực báo giá in trên PDF (cơ chế sẵn, số ngày chờ chốt), yêu cầu ẩn dữ liệu mật (giá vốn, gross) phải thực thi ở tầng API chứ không chỉ giấu trên giao diện, và 7 use case phụ trợ được viết đầy đủ (quản trị người dùng, hồ sơ đại lý, gửi lại khi lỗi, tìm kiếm & sao chép báo giá...) — bản v1 dồn tất cả vào một câu.
-
-## 3. Những gì KHÔNG đổi
-
-- Triết lý "cấu hình bằng dữ liệu, không đụng schema": thêm sản phẩm/thông số mới không cần dev.
-- Đúng 2 vai sử dụng: **Admin tổng công ty** và **Đại lý**. Khách cuối không truy cập hệ thống, chỉ nhận báo giá. (Đã cân nhắc phương án cho khách tự cấu hình và quyết định không làm.)
-- Nguyên tắc snapshot: báo giá đã phát hành không bị ảnh hưởng bởi mọi thay đổi cấu hình sau đó.
-- Dữ liệu mật với đại lý: giá vốn, đơn giá vật tư, chi tiết BOM, mọi % gross.
-- VAT một mức chung toàn hệ thống.
-
-## 4. Các điểm CHƯA chốt — cần quyết định từ công ty
-
-| Mã | Câu hỏi cần trả lời | Ai chốt |
-|---|---|---|
-| O1 | Giá min–max cho đại lý là bao nhiêu (theo từng sản phẩm)? | Ban giá / sếp |
-| O2 | Đại lý có được bán dưới giá nhập không? (hiện mặc định: **không**) | Ban giá / sếp |
-| O3 | Báo giá có hiệu lực bao nhiêu ngày? (hiện: chưa in hạn lên PDF) | Sếp |
-| O4 | Phiếu BOM về nhà máy đi đường nào (API/email), format gì, nhà máy nào nhận? | Bộ phận sản xuất |
-| O5 | Nền tảng chạy trên gì: Zalo Mini App, web, hay cả hai? Kênh gửi báo giá cho khách? | Chủ dự án / công ty |
-| — | Bảng tính BOM chính thức (đầu vào để import công thức vào hệ thống) | Công ty |
-| — | Quy tắc làm tròn tiền (đề xuất: làm tròn về đồng ở từng dòng) | Kế toán |
-
-Thiết kế đã **chừa sẵn chỗ cho mọi điểm trên** — chốt xong chỉ nhập cấu hình, không phải sửa thiết kế.

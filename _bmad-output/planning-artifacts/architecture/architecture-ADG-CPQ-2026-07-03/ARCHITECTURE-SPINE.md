@@ -32,13 +32,13 @@ companions: []
 | `customer` | Kho khách theo đại lý | F5 |
 | `catalog` | Danh mục, sản phẩm, thông số dự án, phụ kiện | F1 |
 | `component` | Loại/SKU linh kiện, auto-fill, tương thích | F2 |
-| `material` | Vật tư, BOM template | F3 |
+| `material` | Vật tư, workbook BOM (Excel-as-engine [D14]) | F3 |
 | `pricing` | Gross, range, VAT, tính giá | F4 |
 | `quote` | Pipeline báo giá, hạng mục, snapshot, phát hành | F5, F7 |
 | `mockup` | Ảnh AI (adapter + queue) | F6 |
 | `delivery` | Gửi khách, gửi nhà máy, PDF | F7 |
 | `audit` | config_audit_log, interceptor | F8 |
-| `import-tools` | Import công thức, golden tests, seed dữ liệu | F9 |
+| `import-tools` | Nghiệm thu workbook (bộ ca mẫu), seed dữ liệu | F9 |
 
 ## Invariants & Rules
 
@@ -74,11 +74,11 @@ graph TD
 - **Prevents:** field mật (cost_material, unit_price vật tư, gross, BOM chi tiết) lọt vào payload cho vai dealer rồi "giấu bằng UI".
 - **Rule:** response DTO cho vai dealer là **whitelist** khai báo tường minh; field mật không xuất hiện trong DTO đó (kể cả giá trị null). Bộ e2e test có ca cố định: đăng nhập dealer, gọi mọi endpoint quote/pricing, assert không có field mật trong JSON.
 
-### AD-4 — Một formula engine duy nhất, package riêng
+### AD-4 — Một formula engine duy nhất cho auto-fill & tương thích *(thu hẹp theo D14)*
 
-- **Binds:** F2, F3, F9 (FR-011, FR-012, FR-021, FR-022, FR-090)
-- **Prevents:** auto-fill, điều kiện tương thích, BOM và golden tests dùng hai bộ semantics khác nhau; hoặc dùng `eval` JS gây lỗ hổng.
-- **Rule:** `packages/formula-engine` là parser AST tự viết theo đặc tả trong ERD Project Note (số học, so sánh, logic, `if`, `round/ceil/floor/min/max`, biến `proj.*`/`comp.*`). Pure function `(expression, variables) → value | typedError`, không truy cập I/O, không eval. Mọi nơi cần chạy công thức đều import package này.
+- **Binds:** F2 (FR-011, FR-012, FR-022)
+- **Prevents:** auto-fill và điều kiện tương thích dùng hai bộ semantics khác nhau; hoặc dùng `eval` JS gây lỗ hổng.
+- **Rule:** `packages/formula-engine` là parser AST tự viết theo đặc tả trong ERD Project Note (số học, so sánh, logic, `if`, `round/ceil/floor/min/max`, biến `proj.*`/`comp.*`). Pure function `(expression, variables) → value | typedError`, không truy cập I/O, không eval. **Phạm vi: chỉ auto-fill thông số linh kiện + điều kiện tương thích SKU — BOM KHÔNG đi qua engine này** (BOM tính bằng workbook Excel, xem AD-17). Package vẫn chứa `roundVnd()` (AD-6).
 
 ### AD-5 — Phát hành là transaction snapshot; sau submitted là bất biến
 
@@ -152,6 +152,12 @@ graph TD
 - **Prevents:** hai tài khoản cùng đại lý mở cùng một nháp và ghi đè âm thầm lẫn nhau — mỗi dev tự xử một kiểu (last-write-wins chỗ này, lock chỗ kia).
 - **Rule:** mọi mutation lên `quote`/`quote_item` ở trạng thái nháp mang theo `updated_at` client đã đọc; server so khớp trước khi ghi — lệch thì từ chối với mã lỗi chuẩn `DRAFT_CONFLICT` (409), client tải lại. Không dùng khoá bi quan/khoá phiên.
 
+### AD-17 — BOM tính bằng workbook Excel qua hợp đồng INPUT/OUTPUT `[ADOPTED — D14]`
+
+- **Binds:** F3, F9 (FR-021, FR-023, FR-030, FR-090, FR-091)
+- **Prevents:** hệ thống tái hiện logic Excel rồi lệch với file gốc; mỗi dev tự chế cách đọc file; file bị sửa ngoài luồng lọt vào production; BOM tính trong request HTTP gây timeout.
+- **Rule:** logic BOM **nằm nguyên trong file Excel** — hệ thống không import/không tái hiện công thức. Mỗi sản phẩm một `product_bom_workbook` **phiên bản hoá + checksum**, chỉ version vượt nghiệm thu bộ ca mẫu mới được active (một active/sản phẩm — F4). Việc tính đi qua **một adapter duy nhất** `BomWorkbookEngine` (interface trong module `material`): nhận `(workbookVersionId, params)` → ghi named ranges sheet INPUT → tính → đọc bảng OUTPUT chuẩn `[material_code, quantity]` `[OPEN O9]` → trả typed result/error. Engine cụ thể chọn bằng **story spike** trên file thật (ứng viên: LibreOffice headless, HyperFormula, sidecar Python `formulas`); macro/VBA không hỗ trợ. Chạy trong worker khi thuộc luồng chậm (AD-7); mọi lần tính ghi lại `bom_workbook_version` vào hạng mục.
+
 ## Consistency Conventions
 
 | Concern | Convention |
@@ -184,7 +190,8 @@ graph TD
 | BullMQ | bản hiện hành |
 | zod | bản hiện hành (schemas shared) |
 | Playwright (render PDF từ template HTML) | bản hiện hành |
-| Object storage (ảnh, PDF) | S3-compatible — ưu tiên cloud VN / Garage / SeaweedFS; nếu MinIO CE thì chấp nhận quản trị CLI-only (Web UI đã bị gỡ khỏi bản community) `[theo hạ tầng — Deferred]` |
+| Object storage (ảnh, PDF, workbook BOM) | S3-compatible — ưu tiên cloud VN / Garage / SeaweedFS; nếu MinIO CE thì chấp nhận quản trị CLI-only (Web UI đã bị gỡ khỏi bản community) `[theo hạ tầng — Deferred]` |
+| Engine tính workbook Excel (AD-17) | **Spike trên file thật** — ứng viên: LibreOffice headless / HyperFormula / sidecar Python `formulas` |
 | pnpm | **11.x**, pin qua trường `packageManager` |
 
 ## Structural Seed
@@ -231,13 +238,13 @@ graph LR
 | --- | --- | --- |
 | F1 Catalog & sản phẩm | `catalog` | AD-1, AD-9, AD-12 |
 | F2 Linh kiện & tương thích | `component` + `formula-engine` | AD-1, AD-4 |
-| F3 Vật tư & BOM | `material` + `formula-engine` | AD-4, AD-6 |
+| F3 Vật tư & BOM | `material` + adapter `BomWorkbookEngine` | AD-6, AD-17 |
 | F4 Định giá | `pricing` | AD-2, AD-3, AD-5, AD-6 |
 | F5 Pipeline báo giá | `quote`, `customer` | AD-2, AD-5, AD-8, AD-16 |
 | F6 Mock-up AI | `mockup` (+queue) | AD-7, AD-13, AD-14 |
 | F7 Phát hành & gửi | `quote`, `delivery` (+queue) | AD-5, AD-7, AD-13 |
 | F8 Quản trị & audit | `auth`, `dealer`, `audit` | AD-8, AD-9, AD-15 |
-| F9 Import & golden tests | `import-tools` + `formula-engine` | AD-4 |
+| F9 Nghiệm thu workbook | `import-tools` + adapter `BomWorkbookEngine` | AD-17 |
 | Seed dữ liệu ban đầu (vật tư + đơn giá, SKU linh kiện, ~300 đại lý + gross, admin bootstrap) | `import-tools` — công cụ import CSV/Excel, build trong MVP trước pilot | AD-9, AD-12 |
 
 ## Deferred
@@ -245,6 +252,8 @@ graph LR
 | Quyết định | Vì sao chờ được |
 | --- | --- |
 | Nhà cung cấp AI mockup | Adapter interface (AD-13) cách ly; chọn khi test chất lượng ảnh + chi phí/lần — cần trước khi build F6 thật |
+| Engine tính workbook Excel cụ thể | Adapter `BomWorkbookEngine` (AD-17) cách ly; chốt bằng spike trên file Excel thật của công ty — cần trước khi build F3 thật |
+| Nội dung OUTPUT workbook (chỉ số lượng hay cả tiền) | `[OPEN O9]` — hợp đồng OUTPUT viết theo khuyến nghị [material_code, quantity]; đổi khi xem file thật chỉ chạm FR-030/AD-17, không lan rộng |
 | Kênh + format gửi nhà máy tự động | `[OPEN O4]`; MVP xuất file chuẩn qua adapter manual |
 | Hạ tầng deploy (server công ty vs cloud VN) | Docker hoá nên chuyển được; chốt trước pilot |
 | CI/CD chi tiết | Sau khi repo có code; tối thiểu: lint + test + build mỗi PR |

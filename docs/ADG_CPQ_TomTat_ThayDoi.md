@@ -13,10 +13,12 @@
 - **v2:** admin cấu hình điều kiện tương thích (VD: bộ tời X chỉ dùng cho diện tích ≤ 25m²); hệ thống **chỉ hiển thị các SKU hợp lệ** theo thông số đã nhập, đại lý chọn trong số đó.
 - **Lý do:** chọn sai linh kiện → BOM sai gửi thẳng về nhà máy. Rủi ro này không thể để sau MVP.
 
-### ③ Toàn bộ logic tính BOM nằm TRONG hệ thống [D10]
+### ③ BOM tính bằng CHÍNH FILE EXCEL của công ty [D14 — cập nhật 03/07, đảo phương án cũ]
 - Câu hỏi lớn: logic tính vật tư đang nằm trong file Excel phức tạp của công ty — đẩy vào hệ thống hay để hệ thống gọi Excel?
-- **Chốt:** đẩy toàn bộ vào hệ thống. Khi công ty chốt bảng tính chính thức, logic sẽ được **import (có AI hỗ trợ) và nghiệm thu bằng "golden tests"** — chạy song song Excel với hệ thống trên hàng loạt bộ thông số thật, khớp 100% mới đưa vào sử dụng. Sau đó **hệ thống là nguồn chân lý duy nhất**, sửa công thức = sửa trên hệ thống (có ghi vết).
-- Ngôn ngữ công thức được đặc tả mới, hỗ trợ **rẽ nhánh điều kiện** (VD: "cao trên 3m thì dùng định mức khác") — bản v1 hoàn toàn không đặc tả điều này.
+- **Chốt (mới):** KHÔNG import logic vào hệ thống. Hệ thống chỉ làm việc qua **hợp đồng INPUT/OUTPUT**: bơm thông số (cao, rộng...) vào sheet INPUT của file, đọc kết quả (mã vật tư + số lượng) từ sheet OUTPUT. Logic tính **nằm nguyên trong file Excel** — đội làm giá tiếp tục làm việc trên file quen thuộc.
+- Đổi lại, file được kiểm soát chặt: **upload lên hệ thống có phiên bản + checksum**, và chỉ phiên bản vượt **nghiệm thu bộ ca mẫu** (so kết quả với đáp án người làm giá xác nhận, khớp 100%) mới được dùng tính giá thật. Sửa logic = sửa file → upload phiên bản mới → nghiệm thu lại.
+- Ngôn ngữ công thức trong hệ thống vẫn tồn tại nhưng **chỉ dùng cho** auto-fill thông số linh kiện và điều kiện lọc SKU tương thích (mục ②).
+- Còn chờ xem file thật (O9): OUTPUT chỉ trả số lượng (đơn giá vẫn quản lý trong hệ thống — khuyến nghị) hay trả cả tiền.
 
 ### ④ Giá cả có kỷ luật vòng đời rõ ràng [D3][D4][D5]
 - Khoảng giá bán cho đại lý chỉ còn **một cơ chế min–max** do công ty quy định (bỏ cơ chế ±% chồng chéo của v1).

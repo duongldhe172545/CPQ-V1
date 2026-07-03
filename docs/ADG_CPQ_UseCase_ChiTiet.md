@@ -26,9 +26,9 @@
 | Cấu hình | UC-A3 | Quản lý loại linh kiện, thông số & SKU linh kiện | Admin | — |
 | Cấu hình | UC-A4 | Gán loại linh kiện vào sản phẩm: công thức auto-fill & quy tắc tương thích SKU | Admin | — |
 | Cấu hình | UC-A5 | Quản lý phụ kiện & gán vào sản phẩm | Admin | — |
-| Cấu hình | UC-A6 | Quản lý vật tư & BOM template | Admin | — |
+| Cấu hình | UC-A6 | Quản lý vật tư & workbook BOM (Excel-as-engine [D14]) | Admin | — |
 | Cấu hình | UC-A7 | Cấu hình giá (gross, range min–max, VAT, hiệu lực) | Admin | — |
-| Cấu hình | UC-A8 | Import logic BOM từ bảng tính & nghiệm thu golden tests | Admin | — |
+| Cấu hình | UC-A8 | Nghiệm thu workbook BOM bằng bộ ca mẫu | Admin | — |
 | Pipeline | UC-01 | Khởi tạo báo giá & chọn/tạo khách hàng | Đại lý | 1 |
 | Pipeline | UC-02 | Quản lý hạng mục báo giá (thêm/xoá/sao chép) | Đại lý | 2 |
 | Pipeline | UC-03 | Chọn sản phẩm cho hạng mục | Đại lý | 2 |
@@ -175,7 +175,7 @@
 **Luồng chính**
 
 1. Admin gán một hoặc nhiều loại linh kiện vào sản phẩm; đặt bắt buộc/không, thứ tự.
-2. Với mỗi thông số linh kiện cần auto-fill, admin nhập biểu thức công thức (biến `proj.<code>`, `comp.<code>`; hỗ trợ `if(...)` [D10]).
+2. Với mỗi thông số linh kiện cần auto-fill, admin nhập biểu thức công thức (biến `proj.<code>`, `comp.<code>`; hỗ trợ `if(...)` — ngôn ngữ công thức FR-022, chỉ dùng cho auto-fill/tương thích [D14]).
 3. **[D2]** Với mỗi SKU của loại linh kiện, admin khai **điều kiện tương thích** (`condition_expression` — biểu thức true/false theo `proj.*`/`comp.*`; để trống = luôn khả dụng cho sản phẩm này). SKU không được khai = không khả dụng cho sản phẩm.
 4. Admin bấm kiểm thử: nhập bộ giá trị thông số mẫu → hệ thống hiển thị danh sách SKU lọt qua bộ lọc và kết quả auto-fill.
 5. Hệ thống validate cú pháp và sự tồn tại của các biến, rồi lưu.
@@ -227,41 +227,43 @@
 
 ---
 
-## UC-A6 — Quản lý vật tư & BOM template
+## UC-A6 — Quản lý vật tư & workbook BOM *(viết lại theo [D14])*
 
 | Trường | Nội dung |
 |---|---|
 | **Mã** | UC-A6 |
 | **Actor chính** | Admin |
 | **Actor phụ** | Hệ thống CPQ |
-| **Mục tiêu** | Quản lý danh mục vật tư (đơn giá) và BOM template theo công thức tính số lượng [D10] |
-| **Tiền điều kiện** | Sản phẩm và thông số dự án đã có |
+| **Mục tiêu** | Quản lý danh mục vật tư (đơn giá) và **workbook Excel BOM** theo sản phẩm — hệ thống chỉ quan tâm INPUT/OUTPUT của file, không import logic [D14] |
+| **Tiền điều kiện** | Sản phẩm và thông số dự án đã có; workbook chuẩn hoá theo mẫu (sheet INPUT ô đặt tên, sheet OUTPUT bảng chuẩn) |
 | **Trigger** | Admin mở màn hình "Vật tư / BOM" |
-| **Hậu điều kiện (thành công)** | BOM template active cho sản phẩm; Bước 3 tính được cost_material |
-| **Hậu điều kiện (thất bại)** | Không lưu; báo lỗi công thức |
-| **Bảng liên quan** | `material`, `bom_template`, `bom_template_line`, `project_param_def`, `config_audit_log` |
+| **Hậu điều kiện (thành công)** | Workbook version mới ở trạng thái chờ nghiệm thu (UC-A8); Bước 3 tính được cost_material từ version active |
+| **Hậu điều kiện (thất bại)** | Không lưu; báo lỗi hợp đồng INPUT/OUTPUT |
+| **Bảng liên quan** | `material`, `product_bom_workbook`, `project_param_def`, `config_audit_log` |
 
 **Luồng chính**
 
-1. Admin tạo/sửa vật tư (`material`): code, tên, đơn vị, đơn giá hiện hành (thay đổi giá ghi audit log).
-2. Admin tạo BOM template cho sản phẩm (`bom_template`).
-3. Admin thêm các dòng BOM (`bom_template_line`): chọn vật tư, nhập `quantity_formula` (chỉ dùng biến `proj.*`; hỗ trợ rẽ nhánh `if(...)` và các hàm `round/ceil/floor/min/max` [D10]).
-4. Admin kiểm thử với bộ thông số mẫu để xem tổng lượng và giá vốn NVL.
-5. Hệ thống validate và lưu; khi đặt template `is_active`, hệ thống tự bỏ active template cũ của sản phẩm **[F4: đúng một template active mỗi sản phẩm]**.
+1. Admin tạo/sửa vật tư (`material`): code, tên, đơn vị, đơn giá hiện hành (thay đổi giá ghi audit log). `code` vật tư phải khớp `material_code` trong OUTPUT của workbook.
+2. Admin upload workbook `.xlsx` cho sản phẩm → hệ thống tạo `product_bom_workbook` version mới (checksum, người upload, audit).
+3. Hệ thống **kiểm tra hợp đồng**: sheet INPUT có đủ ô đặt tên khớp `code` thông số dự án của sản phẩm; sheet OUTPUT đúng bảng chuẩn; mọi `material_code` trong OUTPUT tồn tại trong `material`.
+4. Admin chạy thử với bộ thông số mẫu: hệ thống ghi INPUT → engine tính → hiển thị OUTPUT (danh sách vật tư + số lượng) và giá vốn NVL ước tính.
+5. Version mới chỉ được đặt `is_active` sau khi vượt nghiệm thu (UC-A8); active version mới tự bỏ active version cũ **[F4: đúng một version active mỗi sản phẩm]**.
 
 **Luồng phụ & ngoại lệ**
 
-- **3a (số lượng cố định):** công thức là hằng số.
-- **4a (kết quả bất hợp lý):** admin sửa công thức/đơn giá, lặp lại bước 4.
-- **E-1 (công thức tham chiếu thông số không thuộc sản phẩm):** chặn lưu.
-- **E-2 (vật tư thiếu đơn giá):** cảnh báo, không cho active template.
+- **3a (thiếu ô INPUT cho thông số bắt buộc):** chặn, liệt kê thông số thiếu.
+- **3b (OUTPUT chứa mã vật tư lạ):** chặn, liệt kê mã chưa có trong danh mục — admin thêm vật tư trước.
+- **4a (kết quả bất hợp lý):** admin sửa file Excel bên ngoài, upload version mới, lặp lại.
+- **E-1 (file lỗi/không mở được):** báo lỗi, không tạo version.
+- **E-2 (vật tư trong OUTPUT thiếu đơn giá):** cảnh báo, không cho active.
 
 **Business rules**
 
-- Đơn giá vật tư chỉ lưu **một giá hiện hành** (MVP, không lịch sử).
+- **Logic tính nằm nguyên trong file Excel** — hệ thống không tái hiện, không import công thức [D14].
+- Đơn giá vật tư chỉ lưu **một giá hiện hành** (MVP); **[OPEN — O9]** OUTPUT khuyến nghị chỉ gồm mã + số lượng, đơn giá lấy từ hệ thống — chốt khi xem file thật.
 - Linh kiện và phụ kiện **không** tác động BOM.
 - Đơn giá vật tư và dòng BOM là dữ liệu mật, ẩn với đại lý — thực thi ở tầng API.
-- **[OPEN — chờ công ty]** Nội dung công thức cụ thể chưa chốt; nhập tay hoặc import qua UC-A8 khi có bảng tính chính thức.
+- Sửa file trên ổ đĩa ngoài không có tác dụng — chỉ version đã upload + nghiệm thu mới được dùng (checksum phát hiện lệch).
 
 ---
 
@@ -300,37 +302,38 @@
 
 ---
 
-## UC-A8 — Import logic BOM từ bảng tính & nghiệm thu golden tests *(MỚI — [D10])*
+## UC-A8 — Nghiệm thu workbook BOM bằng bộ ca mẫu *(viết lại theo [D14])*
 
 | Trường | Nội dung |
 |---|---|
 | **Mã** | UC-A8 |
-| **Actor chính** | Admin (phối hợp đội phát triển/AI) |
-| **Actor phụ** | Hệ thống CPQ |
-| **Mục tiêu** | Chuyển toàn bộ logic tính BOM/thông số từ bảng tính Excel của công ty vào cấu hình hệ thống, nghiệm thu bằng đối chiếu tự động |
-| **Tiền điều kiện** | Bảng tính chính thức đã được công ty chốt **[OPEN — chờ công ty]**; sản phẩm & thông số dự án đã khai (UC-A1/A2) |
-| **Trigger** | Có bảng tính chốt cho một sản phẩm |
-| **Hậu điều kiện (thành công)** | Công thức trong hệ thống cho ra kết quả **khớp 100%** với Excel trên bộ golden tests; sản phẩm sẵn sàng go-live |
-| **Hậu điều kiện (thất bại)** | Sản phẩm chưa go-live; danh sách ca lệch được ghi lại để xử lý |
-| **Bảng liên quan** | `bom_template`, `bom_template_line`, `component_param_formula`, `component_sku_applicability`, `material` |
+| **Actor chính** | Admin |
+| **Actor phụ** | Hệ thống CPQ, người làm giá (cung cấp kết quả kỳ vọng) |
+| **Mục tiêu** | Chứng minh workbook version mới cho kết quả đúng trước khi đưa vào tính giá thật |
+| **Tiền điều kiện** | Workbook version đã upload và qua kiểm tra hợp đồng (UC-A6) |
+| **Trigger** | Admin bấm "Nghiệm thu" trên một version |
+| **Hậu điều kiện (thành công)** | Version được đánh dấu đã nghiệm thu, đủ điều kiện đặt active; sản phẩm sẵn sàng go-live |
+| **Hậu điều kiện (thất bại)** | Version không được active; danh sách ca lệch ghi lại để người làm giá xử lý |
+| **Bảng liên quan** | `product_bom_workbook`, `material` |
 
 **Luồng chính**
 
-1. Admin cung cấp bảng tính + buổi khai thác logic ngầm với người chủ file (ô sửa tay, bảng tra phụ, ngoại lệ không ghi trong file).
-2. Logic được dịch (AI-assisted) thành: dòng BOM + công thức số lượng, công thức auto-fill, điều kiện tương thích SKU.
-3. Xây bộ **golden tests**: N bộ thông số thật (bao gồm các ca biên) kèm kết quả mong đợi lấy từ Excel gốc.
-4. Hệ thống chạy toàn bộ golden tests, so kết quả từng dòng vật tư/giá trị.
-5. Khớp 100% → admin duyệt go-live cho sản phẩm; bộ golden tests được giữ lại chạy hồi quy mỗi khi sửa công thức.
+1. Admin nạp **bộ ca mẫu** cho sản phẩm: mỗi ca = bộ giá trị thông số (bao gồm các ca biên) + kết quả kỳ vọng (danh sách mã vật tư + số lượng) do người làm giá xác nhận.
+2. Hệ thống chạy từng ca qua engine: ghi INPUT → tính → đọc OUTPUT.
+3. Hệ thống so OUTPUT với kết quả kỳ vọng từng dòng.
+4. Khớp 100% → version gắn nhãn "đã nghiệm thu" (`validated_at`); admin đặt active.
+5. Bộ ca mẫu lưu theo sản phẩm, **tự chạy lại mỗi khi upload version workbook mới** — chặn active nếu lệch.
 
 **Luồng phụ & ngoại lệ**
 
-- **4a (có ca lệch):** liệt kê từng ca (input, kết quả Excel, kết quả hệ thống); sửa công thức rồi chạy lại.
-- **E-1 (logic Excel mâu thuẫn nội bộ):** ghi nhận, đưa người chủ file quyết định đâu là đúng — không tự đoán.
+- **3a (có ca lệch):** liệt kê từng ca (input, kỳ vọng, thực tế); admin đưa người chủ file sửa Excel, upload version mới, chạy lại.
+- **E-1 (engine không tính được file — công thức/macro không hỗ trợ):** báo rõ vị trí lỗi; ghi nhận giới hạn engine để xử lý (xem AD-17).
 
 **Business rules**
 
-- Sau go-live, **hệ thống là nguồn chân lý duy nhất** — công ty khoá việc sửa file Excel làm căn cứ giá; sửa công thức = sửa trên hệ thống (có audit log).
-- Không go-live sản phẩm nào chưa qua golden tests.
+- **File Excel là nguồn chân lý của logic BOM** [D14]; hệ thống chỉ bảo đảm *file cho kết quả đúng và không bị đổi ngoài luồng* (version + checksum + nghiệm thu).
+- Không sản phẩm nào go-live với workbook chưa nghiệm thu.
+- Macro/VBA không được hỗ trợ — logic phải là công thức thuần (ghi vào chuẩn workbook).
 
 ---
 
@@ -417,7 +420,7 @@
 | **Trigger** | Đại lý mở hạng mục ở bước `product` |
 | **Hậu điều kiện (thành công)** | `quote_item.product_id` được gán; cấu hình sản phẩm đã nạp; `step = photo` |
 | **Hậu điều kiện (thất bại)** | Không chuyển bước; cảnh báo |
-| **Bảng liên quan** | `category`, `product`, `project_param_def`, `product_component_type`, `product_accessory`, `bom_template`, `product_pricing_config` |
+| **Bảng liên quan** | `category`, `product`, `project_param_def`, `product_component_type`, `product_accessory`, `product_bom_workbook`, `product_pricing_config` |
 
 **Luồng chính**
 
@@ -587,21 +590,21 @@
 | **Trigger** | Đại lý chuyển sang Bước 3 |
 | **Hậu điều kiện (thành công)** | Mỗi hạng mục có `quote_item_bom_line`, `cost_material`, `applied_gross_percent`, `import_price`; `current_phase = pricing` |
 | **Hậu điều kiện (thất bại)** | Dừng tính; báo lỗi cấu hình cho admin |
-| **Bảng liên quan** | `bom_template`, `bom_template_line`, `material`, `quote_item_bom_line`, `dealer`, `dealer_product_gross`, `product_pricing_config`, `quote_item` |
+| **Bảng liên quan** | `product_bom_workbook`, `material`, `quote_item_bom_line`, `dealer`, `dealer_product_gross`, `product_pricing_config`, `quote_item` |
 
 **Luồng chính** *(lặp cho từng hạng mục)*
 
-1. Hệ thống chạy `quantity_formula` từng dòng BOM (biến `proj.*` của hạng mục) để ra số lượng vật tư cho **một đơn vị** hạng mục.
-2. Hệ thống tính tiền NVL = Σ(số lượng × đơn giá vật tư), ghi `quote_item_bom_line` (ẩn).
+1. **[D14]** Hệ thống ghi giá trị thông số của hạng mục vào sheet INPUT của workbook version active, chạy engine tính, đọc sheet OUTPUT → danh sách [mã vật tư, số lượng] cho **một đơn vị** hạng mục; ghi lại `bom_workbook_version` đã dùng.
+2. Hệ thống tính tiền NVL = Σ(số lượng × đơn giá vật tư từ `material`) **[OPEN — O9]**, ghi `quote_item_bom_line` (ẩn).
 3. Hệ thống cộng tiền linh kiện (Σ đơn giá × số lượng) và tiền phụ kiện (Σ đơn giá) → `cost_material`.
 4. Hệ thống resolve gross: `global_gross%` + (gross đại lý theo sản phẩm nếu có, ngược lại `default_gross%`).
 5. Hệ thống tính `import_price = cost_material × (1 + gross%/100)`, làm tròn về đồng, và lưu (ẩn cost_material/gross).
 
 **Luồng phụ & ngoại lệ**
 
-- **1a (công thức hằng số):** trả về số lượng cố định.
-- **E-1 (công thức lỗi / chia 0):** dừng, thông báo lỗi cấu hình, không cho đi tiếp; cảnh báo admin.
-- **E-2 (vật tư thiếu đơn giá):** dừng, cảnh báo admin.
+- **E-1 (workbook trả lỗi / engine không tính được):** dừng, thông báo lỗi cấu hình, không cho đi tiếp; cảnh báo admin.
+- **E-2 (OUTPUT chứa mã vật tư không có trong hệ thống hoặc vật tư thiếu đơn giá):** dừng, cảnh báo admin.
+- **E-3 (sản phẩm chưa có workbook version active):** chặn từ khi chọn sản phẩm (UC-03 E-1 "cấu hình chưa đủ").
 
 **Business rules**
 
